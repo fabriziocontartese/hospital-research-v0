@@ -1,0 +1,175 @@
+.formBuilder {
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+  background: #ffffff;
+  border-radius: 18px;
+  padding: 1.75rem;
+  box-shadow: 0 24px 55px rgba(15, 23, 42, 0.08);
+}
+
+.metadata {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  font-size: 0.95rem;
+  color: #1f2937;
+  font-weight: 600;
+}
+
+input,
+textarea,
+select {
+  padding: 0.65rem 0.85rem;
+  border-radius: 12px;
+  border: 1px solid #d4d4d8;
+  background: #f8fafc;
+}
+
+textarea {
+  min-height: 120px;
+}
+
+.items {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.itemCard {
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  background: #f8fafc;
+  box-shadow: 0 15px 40px rgba(15, 23, 42, 0.05);
+}
+
+.itemHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.itemHeader button {
+  border: none;
+  background: #fee2e2;
+  color: #b91c1c;
+  border-radius: 999px;
+  padding: 0.35rem 0.85rem;
+  cursor: pointer;
+}
+
+.inlineRow {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.scaleRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 1rem;
+}
+
+.actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.actions button {
+  border: none;
+  background: #e2e8f0;
+  color: #1f2937;
+  border-radius: 12px;
+  padding: 0.6rem 1.2rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.addQuestion {
+  background: transparent;
+  color: #2563eb;
+  border: 1px dashed #93c5fd;
+}
+
+.primary {
+  background: linear-gradient(135deg, #2563eb, #7c3aed);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 15px 35px rgba(37, 99, 235, 0.3);
+}
+
+.actionRight {
+  display: flex;
+  gap: 0.85rem;
+}
+
+.choiceEditor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.choiceLabel {
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.choiceList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.choiceRow {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.choiceRow input {
+  flex: 1;
+}
+
+.choiceRemove {
+  border: none;
+  background: #fee2e2;
+  color: #b91c1c;
+  border-radius: 10px;
+  padding: 0.4rem 0.75rem;
+  cursor: pointer;
+}
+
+.choiceRemove:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.choiceAdd {
+  align-self: flex-start;
+  border: 1px dashed #93c5fd;
+  background: rgba(59, 130, 246, 0.1);
+  color: #2563eb;
+  border-radius: 10px;
+  padding: 0.45rem 0.85rem;
+  cursor: pointer;
+}

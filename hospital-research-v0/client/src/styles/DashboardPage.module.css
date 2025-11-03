@@ -1,0 +1,162 @@
+/* hospital-research-v0/client/src/styles/DashboardPage.module.css */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.header h1 {
+  font-size: 1.6rem;
+  margin: 0;
+}
+
+.headerBlurb {
+  color: var(--color-text-secondary);
+  font-size: 0.95rem;
+  max-width: 56ch;
+  line-height: 1.4;
+  margin: 0;
+}
+
+/* Lean, left-to-right compact stats */
+.compactStatsRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0.9rem;
+  width: 100%;
+}
+
+.compactCard {
+  padding: 0;
+}
+
+.compactHeader {
+  padding: 0.6rem 0.8rem 0.2rem 0.8rem;
+}
+
+.compactTitle {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.compactValue {
+  padding: 0.2rem 0.8rem 0.8rem 0.8rem;
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.quickActions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.sectionHeading h2 {
+  font-size: 1.1rem;
+  margin-bottom: 0.25rem;
+}
+
+.sectionHeading p {
+  color: var(--color-text-secondary);
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.actionGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.9rem;
+}
+
+.actionCardLink {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  border-radius: var(--radius-sm);
+}
+
+.actionCardLink:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.actionCard {
+  cursor: pointer;
+  transition: transform var(--transition-base), box-shadow var(--transition-base);
+}
+
+.actionCard:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card);
+}
+
+.openPill {
+  display: inline-block;
+  padding: 6px 10px;
+  border-radius: 9999px;
+  border: 1px solid var(--color-border);
+  font-size: 0.85rem;
+}
+
+.activitySection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.activityList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.activityItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 0.8rem 1rem;
+  background: var(--color-surface-muted);
+}
+
+.activityInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.activityTitle {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.activityMeta {
+  font-size: 0.85rem;
+  color: var(--color-text-tertiary);
+}
+
+.emptyState {
+  text-align: center;
+  padding: 1.6rem 1rem;
+  color: var(--color-text-tertiary);
+}
+
+@media (max-width: 720px) {
+  .compactStatsRow {
+    grid-template-columns: 1fr;
+  }
+  .activityItem {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

@@ -1,0 +1,138 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 2.4rem;
+}
+
+.header h1 {
+  font-size: 2rem;
+  margin-bottom: 0.35rem;
+}
+
+.header p {
+  color: var(--color-text-secondary);
+  font-size: 0.95rem;
+  line-height: 1.5;
+  max-width: 620px;
+}
+
+.statGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.statValue,
+.statValueSuccess,
+.statValueDanger {
+  font-size: 1.85rem;
+  font-weight: 700;
+}
+
+.statValue {
+  color: var(--color-text-primary);
+}
+
+.statValueSuccess {
+  color: var(--color-success);
+}
+
+.statValueDanger {
+  color: var(--color-danger);
+}
+
+.filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+  align-items: end;
+}
+
+.tasksSection {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  color: var(--color-text-secondary);
+  font-size: 0.9rem;
+}
+
+.filters select {
+  padding: 0.6rem 0.75rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.filterAction {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.emptyState {
+  text-align: center;
+  color: var(--color-text-tertiary);
+  padding: 2rem 1rem;
+}
+
+.modalBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  z-index: 90;
+}
+
+.taskModal {
+  width: min(640px, calc(100vw - 2.5rem));
+  max-width: 640px;
+  max-height: min(90vh, calc(100vh - 2.5rem));
+  overflow-y: auto;
+}
+
+.taskModalBody {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.taskSummaryGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1rem;
+}
+
+.summaryLabel {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-tertiary);
+}
+
+.summaryValue {
+  display: block;
+  margin-top: 0.35rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.mono {
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+}
+
+.modalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}

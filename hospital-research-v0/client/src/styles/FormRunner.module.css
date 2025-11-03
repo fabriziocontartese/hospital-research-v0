@@ -1,0 +1,82 @@
+.wrapper {
+  background: #fff;
+  border-radius: 1rem;
+  padding: 2rem;
+  max-width: 640px;
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.08);
+}
+
+.notice {
+  background: #ecfdf5;
+  color: #047857;
+  padding: 0.75rem;
+  border-radius: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.field label {
+  font-weight: 500;
+  color: #1f2937;
+}
+
+input,
+select {
+  padding: 0.65rem 0.75rem;
+  border-radius: 0.75rem;
+  border: 1px solid #d1d5db;
+  background: #f8fafc;
+}
+
+.checkboxGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem 0;
+}
+
+.checkboxOption {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 500;
+  color: #374151;
+}
+
+.scaleField {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.scaleField input[type='range'] {
+  flex: 1;
+}
+
+.scaleField span {
+  min-width: 2.5rem;
+  text-align: right;
+  font-weight: 600;
+  color: #1d4ed8;
+}
+
+.primary {
+  border: none;
+  background: linear-gradient(135deg, #2563eb, #7c3aed);
+  color: #fff;
+  border-radius: 0.85rem;
+  padding: 0.75rem 1.5rem;
+  cursor: pointer;
+  font-weight: 600;
+}

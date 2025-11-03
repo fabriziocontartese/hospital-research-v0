@@ -1,0 +1,73 @@
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: var(--shadow-soft);
+}
+
+.table th,
+.table td {
+  padding: 0.9rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid var(--color-divider);
+  font-size: 0.92rem;
+}
+
+.table thead {
+  background: var(--color-surface-muted);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.table tbody tr:hover {
+  background: rgba(43, 91, 246, 0.04);
+}
+
+.editingRow {
+  background: rgba(43, 91, 246, 0.1);
+}
+
+.selectField {
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background-color: var(--color-surface);
+  color: var(--color-text-primary);
+  font-size: 0.92rem;
+}
+
+.selectField:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(43, 91, 246, 0.12);
+}
+
+.actionsCell {
+  white-space: nowrap;
+  text-align: right;
+  width: 1%;
+}
+
+.actionGroup {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.deleteButton {
+  color: var(--color-danger);
+}
+
+.deleteButton:hover:not(:disabled) {
+  background: rgba(220, 38, 38, 0.08);
+}
+
+.emptyState {
+  text-align: center;
+  padding: 1.6rem 1rem;
+  color: var(--color-text-tertiary);
+}

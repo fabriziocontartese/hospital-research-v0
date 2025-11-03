@@ -1,0 +1,207 @@
+.shell {
+  /* FIX: valid selector; establish page baseline */
+  min-height: 100vh;
+  background: var(--color-background);
+  color: var(--color-text-primary);
+  position: relative;
+}
+
+/* Shaded backdrop when mobile menu is open */
+.mobileBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.35);
+  z-index: 40;
+}
+
+/* Sidebar: off-canvas on mobile */
+.sidebar {
+  width: 260px;
+  background: linear-gradient(184deg, #ffffff 0%, #f5f6fb 100%);
+  border-right: 1px solid var(--color-border);
+  padding: 1.8rem 1.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.6rem;
+
+  position: fixed;
+  inset: 0 auto 0 0;      /* left, full height */
+  transform: translateX(-100%);
+  transition: transform var(--transition-base);
+  z-index: 50;
+}
+
+.sidebarOpen { transform: translateX(0); }
+
+/* Desktop: use a 2-column grid; sidebar becomes sticky and visible */
+@media (min-width: 1024px) {
+  .shell {
+    display: grid;
+    grid-template-columns: 260px 1fr;
+  }
+  .sidebar {
+    position: sticky;    /* stays in view while main scrolls */
+    top: 0;
+    height: 100vh;
+    transform: none;
+    inset: auto;
+  }
+}
+
+/* Brand */
+.brand {
+  display: flex;
+  gap: 0.9rem;
+  align-items: center;
+  cursor: pointer;
+}
+
+.logo {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: var(--color-primary);
+  color: var(--color-text-inverse);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 1.05rem;
+  box-shadow: 0 12px 24px rgba(43, 91, 246, 0.24);
+}
+
+.brandTitle { font-size: 1.05rem; font-weight: 600; color: var(--color-text-primary); }
+.brandSubtitle { font-size: 0.85rem; color: var(--color-text-tertiary); }
+
+/* Nav */
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+  flex: 1;
+}
+
+.navItem {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 0.9rem;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: none;
+  color: var(--color-text-secondary);
+  font-weight: 500;
+  cursor: pointer;
+  position: relative;
+  text-align: left;
+  transition: background var(--transition-base), color var(--transition-base);
+}
+
+.navItem:hover {
+  background: rgba(43, 91, 246, 0.08);
+  color: var(--color-primary);
+}
+
+.navItemActive {
+  background: rgba(43, 91, 246, 0.12);
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.navMarker {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  opacity: 0;
+  transition: opacity var(--transition-base);
+}
+
+.navItemActive .navMarker { opacity: 1; }
+
+/* Sidebar footer/user */
+.sidebarFooter {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  border-top: 1px solid var(--color-border);
+  padding-top: 1rem;
+}
+
+.userCard { display: flex; gap: 0.9rem; align-items: center; }
+
+.userInitial {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: var(--color-primary-muted);
+  color: var(--color-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+}
+
+.userMeta { display: flex; flex-direction: column; gap: 0.2rem; }
+.userName { font-weight: 600; color: var(--color-text-primary); }
+.userRole { font-size: 0.85rem; color: var(--color-text-tertiary); text-transform: capitalize; }
+
+.signOut { justify-content: flex-start; padding-left: 0.2rem; color: var(--color-text-tertiary); }
+.signOut:hover { color: var(--color-danger); }
+
+/* Main region */
+.mainRegion {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* Mobile header only on small screens */
+.mobileHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.9rem 1.1rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.mobileBrand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.mobileMenuButton { min-width: 84px; }
+
+@media (min-width: 1024px) {
+  .mobileHeader { display: none; }
+}
+
+/* Banner */
+.banner {
+  background: linear-gradient(135deg, rgba(255, 214, 102, 0.45), rgba(255, 244, 199, 0.65));
+  border-bottom: 1px solid rgba(255, 198, 74, 0.45);
+  padding: 0.85rem 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.9rem;
+  color: #8a5700;
+}
+
+.bannerDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #f97316;
+}
+
+/* Page content */
+.content {
+  flex: 1;
+  padding: 1.6rem clamp(1rem, 2.5vw, 2.5rem) 2.4rem;
+}

@@ -1,0 +1,144 @@
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 1.75rem;
+}
+
+.summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1rem;
+}
+
+.summary > div {
+  background: #111827;
+  color: #f9fafb;
+  border-radius: 1rem;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.summary span {
+  font-size: 0.9rem;
+  color: #d1d5db;
+}
+
+.summary strong {
+  font-size: 1.5rem;
+}
+
+.filters {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.9rem;
+  color: #4b5563;
+}
+
+.filters select {
+  padding: 0.5rem;
+  border-radius: 0.6rem;
+  border: 1px solid #d1d5db;
+  background: #fff;
+}
+
+.primary {
+  background: linear-gradient(135deg, #2563eb, #7c3aed);
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  padding: 0.6rem 1.4rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.notice {
+  padding: 0.75rem;
+  background: #ecfdf5;
+  color: #047857;
+  border-radius: 0.75rem;
+}
+
+.error {
+  padding: 0.75rem;
+  background: #fee2e2;
+  color: #b91c1c;
+  border-radius: 0.75rem;
+}
+
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(3px);
+}
+
+.modal {
+  background: #fff;
+  border-radius: 1rem;
+  padding: 2rem;
+  width: min(640px, calc(100vw - 2.5rem));
+  max-width: 640px;
+  max-height: min(90vh, calc(100vh - 2.5rem));
+  overflow-y: auto;
+  box-shadow: 0 12px 45px rgba(15, 23, 42, 0.2);
+}
+
+.modal h2 {
+  margin-top: 0;
+}
+
+.modalForm {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.modalForm input,
+.modalForm select {
+  padding: 0.55rem 0.7rem;
+  border-radius: 0.6rem;
+  border: 1px solid #d1d5db;
+}
+
+.modalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.modalActions button {
+  border: none;
+  background: #e5e7eb;
+  color: #1f2937;
+  border-radius: 0.6rem;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+}
+
+.modalActions button:hover {
+  background: #d1d5db;
+}

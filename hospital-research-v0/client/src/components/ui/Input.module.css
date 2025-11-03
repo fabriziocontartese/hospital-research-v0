@@ -1,0 +1,25 @@
+.field {
+  width: 100%;
+  padding: 0.65rem 0.85rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background-color: var(--color-surface);
+  color: var(--color-text-primary);
+  font-size: 0.95rem;
+  transition: border-color var(--transition-base), box-shadow var(--transition-base);
+}
+
+.field::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.field:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 4px rgba(43, 91, 246, 0.15);
+}
+
+.textarea {
+  resize: vertical;
+  min-height: 120px;
+}

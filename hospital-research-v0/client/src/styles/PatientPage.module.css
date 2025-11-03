@@ -1,0 +1,112 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.linkButton {
+  border: none;
+  background: transparent;
+  color: var(--color-primary);
+  font-weight: 600;
+  cursor: pointer;
+  width: fit-content;
+  padding: 0;
+}
+
+.loading {
+  text-align: center;
+  color: var(--color-text-tertiary);
+}
+
+.summaryGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1.2rem;
+}
+
+.summaryLabel {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-tertiary);
+}
+
+.summaryValue {
+  margin-top: 0.4rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.responseList {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.responseCard {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 1.1rem 1.2rem;
+  background: var(--color-surface-muted);
+}
+
+.responseHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 0.75rem;
+}
+
+.responseHeader h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--color-text-primary);
+}
+
+.responseMeta {
+  font-size: 0.82rem;
+  color: var(--color-text-tertiary);
+}
+
+.responseBody {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.answerRow {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+}
+
+.answerLabel {
+  flex: 0 0 180px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.answerValue {
+  flex: 1;
+  font-size: 0.92rem;
+  color: var(--color-text-primary);
+}
+
+.emptyState {
+  text-align: center;
+  color: var(--color-text-tertiary);
+  padding: 1.5rem 1rem;
+}
+
+@media (max-width: 640px) {
+  .answerRow {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .answerLabel {
+    flex: none;
+  }
+}
