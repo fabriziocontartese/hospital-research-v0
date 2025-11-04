@@ -1,13 +1,9 @@
 [build]
   base = "client"
   command = "npm run build"
-  publish = "build"
+  publish = "client/build"
 
-[build.environment]
-  # fallback if you can't pin Node: tell Node to use legacy OpenSSL provider
-  # prefer using .nvmrc + node 18 instead of this long-term.
-  NODE_OPTIONS = "--openssl-legacy-provider"
-
+# SPA fallback
 [[redirects]]
   from = "/*"
   to = "/index.html"

@@ -1,8 +1,11 @@
 import axios from 'axios';
 
-// Vite-style env var for API base URL
-// Netlify: set VITE_API_BASE_URL in Environment variables
-const baseURL = import.meta.env.VITE_API_BASE_URL || '/api';
+/**
+ * CRA build uses process.env.REACT_APP_* variables.
+ * Set REACT_APP_API_BASE in Netlify to your Render API base URL.
+ * Fallback '/api' only for local dev with a proxy.
+ */
+const baseURL = (process.env.REACT_APP_API_BASE || '/api').trim();
 
 export const apiClient = axios.create({
   baseURL,
