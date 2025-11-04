@@ -17,6 +17,7 @@ apiClient.interceptors.request.use(
     const token = localStorage.getItem('authToken'); // Retrieve the token from localStorage
     if (!token) {
       console.error('No auth token found in localStorage'); // Debugging log
+      throw new Error('Authentication required. Please log in.');
     } else {
       config.headers.Authorization = `Bearer ${token}`; // Add the token to the Authorization header
     }
