@@ -18,4 +18,9 @@ apiClient.interceptors.request.use(
     if (!token) {
       console.error('No auth token found in localStorage'); // Debugging log
     } else {
-      config.headers
+      config.headers.Authorization = `Bearer ${token}`; // Add the token to the Authorization header
+    }
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
