@@ -31,6 +31,8 @@ const Login = () => {
         refreshToken: data.refreshToken,
         user: data.user,
       });
+      localStorage.setItem('authToken', data.accessToken); // Save token to localStorage
+      console.log('Token saved to localStorage:', data.accessToken); // Debugging log
       const redirectTo =
         (location.state && location.state.from?.pathname) || landingByRole[data.user.role] || '/dashboard';
       navigate(redirectTo, { replace: true });
