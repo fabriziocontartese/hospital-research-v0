@@ -48,6 +48,7 @@ const initialCreateState = {
   createAdmin: true,
   adminEmail: '',
   adminDisplayName: '',
+  adminPassword: '', // Added password field
 };
 
 const initialAdminState = {
@@ -225,6 +226,7 @@ useEffect(() => {
       payload.admin = {
         email: createState.adminEmail.trim(),
         displayName: createState.adminDisplayName.trim(),
+        password: createState.adminPassword.trim(), // Include password in payload
       };
     }
 
@@ -548,6 +550,21 @@ useEffect(() => {
                             setCreateState((prev) => ({
                               ...prev,
                               adminDisplayName: event.target.value,
+                            }))
+                          }
+                        />
+                      </div>
+                      <div className={styles.formGroup}>
+                        <label htmlFor="create-admin-password">Admin password</label>
+                        <Input
+                          id="create-admin-password"
+                          required
+                          type="password"
+                          value={createState.adminPassword}
+                          onChange={(event) =>
+                            setCreateState((prev) => ({
+                              ...prev,
+                              adminPassword: event.target.value,
                             }))
                           }
                         />

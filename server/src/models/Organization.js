@@ -8,6 +8,11 @@ const organizationSchema = new mongoose.Schema(
     message: { type: String },
     status: { type: String, enum: ['pending', 'approved', 'rejected', 'suspended'], default: 'pending' },
     isActive: { type: Boolean, default: true },
+    admin: {
+      email: { type: String },
+      displayName: { type: String },
+      password: { type: String }, // Added password field for admin
+    },
   },
   { timestamps: true }
 );
