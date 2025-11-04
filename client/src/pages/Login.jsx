@@ -94,15 +94,6 @@ const Login = () => {
           </Button>
         </form>
         <p className={authStyles.footnote}>
-        Test accounts: <br></br>
-
-        - admin@pioneer.example <br></br>
-        - researcher@pioneer.example <br></br>
-        - staff@pioneer.example <br></br>
-
-        All pwd: ChangeMe123!
-        </p>
-        <p className={authStyles.footnote}>
           Accounts are issued by your organisation administrator. Need access?{' '}
           <Link to="/request-access" className={authStyles.link}>
             Request organisation onboarding
