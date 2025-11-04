@@ -1,6 +1,5 @@
-const { Schema, model } = require("mongoose");
+const { Schema, model } = require('mongoose');
 
-// TODO: Please make sure you edit the User model to whatever makes sense in this case
 const userSchema = new Schema(
   {
     email: {
@@ -8,23 +7,43 @@ const userSchema = new Schema(
       required: [true, 'Email is required.'],
       unique: true,
       lowercase: true,
-      trim: true
+      trim: true,
     },
-    password: {
+    // rest of the code expects `passwordHash` (argon2 hashes)
+    passwordHash: {
       type: String,
-      required: [true, 'Password is required.']
+      required: [true, 'Password hash is required.'],
     },
-    name: { 
+    // the codebase uses `displayName` in several places
+    displayName: {
       type: String,
-      required: [true, 'Name is required.']
-    },    
+      required: [true, 'Display name is required.'],
+      trim: true,
+    },
+    role: {
+      type: String,
+      enum: ['superadmin', 'admin', 'researcher', 'staff'],
+      default: 'researcher',
+    },
+    category: {
+      type: String,
+      maxlength: 120,
+      trim: true,
+    },
+    orgId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Organization',
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
   },
   {
-    // this second object adds extra properties: `createdAt` and `updatedAt`    
-    timestamps: true
+    timestamps: true,
   }
 );
 
-const User = model("User", userSchema);
+const User = model('User', userSchema);
 
 module.exports = User;
