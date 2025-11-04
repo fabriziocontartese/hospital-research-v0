@@ -8,6 +8,7 @@
     "test": "cross-env NODE_ENV=test jest --runInBand",
     "seed": "node src/scripts/seed.js"
   },
+  "engines": { "node": "18.x" },
   "dependencies": {
     "argon2": "^0.31.2",
     "cookie-parser": "^1.4.7",
