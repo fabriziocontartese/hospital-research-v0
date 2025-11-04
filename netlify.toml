@@ -1,11 +1,8 @@
 [build]
+  # set this to the client folder relative to repo root
   base = "client"
   command = "npm run build"
   publish = "build"
-
-# Uncomment and set this if you use Netlify Functions
-# [build]
-#   functions = "netlify/functions"
 
 [[redirects]]
   from = "/*"
