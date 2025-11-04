@@ -1,8 +1,12 @@
 [build]
-  # set this to the client folder relative to repo root
   base = "client"
   command = "npm run build"
   publish = "build"
+
+[build.environment]
+  # fallback if you can't pin Node: tell Node to use legacy OpenSSL provider
+  # prefer using .nvmrc + node 18 instead of this long-term.
+  NODE_OPTIONS = "--openssl-legacy-provider"
 
 [[redirects]]
   from = "/*"
