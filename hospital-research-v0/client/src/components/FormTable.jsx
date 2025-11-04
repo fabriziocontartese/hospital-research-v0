@@ -11,7 +11,7 @@ const FormTable = ({ forms, onAssign, onSend, onPreview }) => {
         <tr>
           <th>Title</th>
           <th>Kind</th>
-          <th>Version</th>
+          <th>Deadline</th>
           <th>Updated</th>
           <th />
         </tr>
@@ -21,7 +21,7 @@ const FormTable = ({ forms, onAssign, onSend, onPreview }) => {
           <tr key={form._id}>
             <td>{form.schema?.title || form.version}</td>
             <td>{form.kind}</td>
-            <td>{form.version}</td>
+            <td>{form.version && form.version !== 'No deadline' ? form.version : '—'}</td>
             <td>{new Date(form.updatedAt || form.createdAt).toLocaleString()}</td>
             <td className={styles.actions}>
               {onPreview ? (

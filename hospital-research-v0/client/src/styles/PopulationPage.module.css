@@ -4,6 +4,26 @@
   gap: 2rem;
 }
 
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.9rem 1.2rem;
+  border-radius: var(--radius-md);
+  background: linear-gradient(120deg, #fef3c7, #fde68a);
+  color: #92400e;
+  font-size: 0.95rem;
+  box-shadow: 0 8px 18px rgba(250, 204, 21, 0.25);
+}
+
+.bannerDot {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 50%;
+  background: #f59e0b;
+  box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.2);
+}
+
 .header {
   display: flex;
   justify-content: space-between;
@@ -185,4 +205,10 @@
   color: var(--color-text-secondary);
   font-size: 0.9rem;
   padding-bottom: 0.5rem;
+}
+
+.readOnlyNote {
+  color: var(--color-text-secondary);
+  font-size: 0.9rem;
+  font-weight: 600;
 }

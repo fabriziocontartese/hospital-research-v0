@@ -11,6 +11,7 @@ const router = express.Router();
 
 const listQuerySchema = z.object({
   role: z.enum(['admin', 'researcher', 'staff']).optional(),
+  orgId: z.string().regex(/^[a-f\d]{24}$/i, 'Invalid orgId').optional(),
   isActive: z
     .string()
     .transform((value) => {
@@ -27,9 +28,14 @@ router.get(
   validateQuery(listQuerySchema),
   async (req, res, next) => {
     try {
-      const filter = {
-        orgId: req.user.orgId,
-      };
+      const filter = {};
+      if (req.user.role === 'superadmin') {
+        if (req.validatedQuery.orgId) {
+          filter.orgId = req.validatedQuery.orgId;
+        }
+      } else {
+        filter.orgId = req.user.orgId;
+      }
 
       if (req.user.role === 'researcher') {
         // Researchers can only list staff to handle assignments
@@ -47,7 +53,10 @@ router.get(
         filter.isActive = req.validatedQuery.isActive;
       }
 
-      const selection = req.user.role === 'admin' ? '-passwordHash -refreshTokens' : 'displayName email role category isActive';
+      const selection =
+        req.user.role === 'researcher'
+          ? 'displayName email role category isActive'
+          : '-passwordHash -refreshTokens';
       const users = await User.find(filter).select(selection);
       res.json({ users });
     } catch (error) {
@@ -70,6 +79,11 @@ router.post(
   validateBody(createSchema),
   async (req, res, next) => {
     try {
+      if (req.user.role === 'superadmin') {
+        const error = new Error('Super admins must specify an organization to create users.');
+        error.status = 400;
+        throw error;
+      }
       const { email, role, displayName } = req.validatedBody;
       const existing = await User.findOne({ email: email.toLowerCase() });
       if (existing) {
@@ -129,6 +143,11 @@ router.patch(
   validateBody(updateSchema),
   async (req, res, next) => {
     try {
+      if (req.user.role === 'superadmin') {
+        const error = new Error('Super admins must manage admins through the dedicated endpoints.');
+        error.status = 400;
+        throw error;
+      }
       const { id } = req.params;
       const user = await User.findOne({ _id: id, orgId: req.user.orgId });
       if (!user) {
@@ -199,6 +218,11 @@ router.delete(
   requireRole('admin'),
   async (req, res, next) => {
     try {
+      if (req.user.role === 'superadmin') {
+        const error = new Error('Super admins must manage admins through the dedicated endpoints.');
+        error.status = 400;
+        throw error;
+      }
       const { id } = req.params;
       const user = await User.findOne({ _id: id, orgId: req.user.orgId });
       if (!user) {

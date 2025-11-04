@@ -11,6 +11,18 @@ const { ensureAnswersSafe, ensureAnswersMatchSchema } = require('../utils/privac
 
 const router = express.Router();
 
+const toIdString = (value) => {
+  if (!value) return null;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object' && value._id) {
+    return value._id.toString();
+  }
+  if (typeof value.toString === 'function') {
+    return value.toString();
+  }
+  return null;
+};
+
 const ensureTaskWritable = async (user, task) => {
   if (!task) {
     const error = new Error('Task not found');
@@ -23,7 +35,7 @@ const ensureTaskWritable = async (user, task) => {
   }
 
   if (user.role === 'staff') {
-    if (task.assignee?.toString() !== user._id.toString()) {
+    if (toIdString(task.assignee) !== user._id.toString()) {
       const error = new Error('Forbidden');
       error.status = 403;
       throw error;
@@ -32,16 +44,60 @@ const ensureTaskWritable = async (user, task) => {
   }
 
   if (user.role === 'researcher') {
-    if (!task.studyId) {
+    const studyId = toIdString(task.studyId);
+    if (!studyId) {
       const error = new Error('Forbidden');
       error.status = 403;
       throw error;
     }
-    const study = await Study.findOne({ _id: task.studyId, orgId: user.orgId });
+    const study = await Study.findOne({ _id: studyId, orgId: user.orgId });
     if (
       !study ||
-      (study.createdBy?.toString() !== user._id.toString() &&
-        !study.assignedStaff.some((memberId) => memberId.toString() === user._id.toString()))
+      (toIdString(study.createdBy) !== user._id.toString() &&
+        !study.assignedStaff.some((memberId) => toIdString(memberId) === user._id.toString()))
+    ) {
+      const error = new Error('Forbidden');
+      error.status = 403;
+      throw error;
+    }
+  }
+};
+
+const ensureTaskReadable = async (user, task) => {
+  if (!task) {
+    const error = new Error('Task not found');
+    error.status = 404;
+    throw error;
+  }
+
+  if (user.role === 'admin') {
+    return;
+  }
+
+  if (user.role === 'staff') {
+    if (toIdString(task.assignee) !== user._id.toString()) {
+      const error = new Error('Forbidden');
+      error.status = 403;
+      throw error;
+    }
+    return;
+  }
+
+  if (user.role === 'researcher') {
+    if (toIdString(task.assignee) === user._id.toString()) {
+      return;
+    }
+    const studyId = toIdString(task.studyId);
+    if (!studyId) {
+      const error = new Error('Forbidden');
+      error.status = 403;
+      throw error;
+    }
+    const study = await Study.findOne({ _id: studyId, orgId: user.orgId });
+    if (
+      !study ||
+      (toIdString(study.createdBy) !== user._id.toString() &&
+        !study.assignedStaff.some((memberId) => toIdString(memberId) === user._id.toString()))
     ) {
       const error = new Error('Forbidden');
       error.status = 403;
@@ -56,6 +112,48 @@ const querySchema = z.object({
   dueAtFrom: z.string().datetime().optional(),
   dueAtTo: z.string().datetime().optional(),
 });
+
+router.get(
+  '/:taskId',
+  auth,
+  requireRole('admin', 'researcher', 'staff'),
+  async (req, res, next) => {
+    try {
+      const task = await Task.findOne({
+        _id: req.params.taskId,
+        orgId: req.user.orgId,
+      })
+        .populate('assignee', 'displayName email role category')
+        .populate('formId')
+        .populate('studyId');
+
+      await ensureTaskReadable(req.user, task);
+
+      const formId = task.formId?._id || task.formId;
+      const response = await FormResponse.findOne({
+        formId,
+        pid: task.pid,
+        orgId: req.user.orgId,
+      }).populate('authoredBy', 'displayName email role');
+
+      const assigneeId = toIdString(task.assignee);
+      const canSubmit =
+        req.user.role === 'admin' ||
+        req.user.role === 'researcher' ||
+        assigneeId === req.user._id.toString();
+
+      res.json({
+        task,
+        response,
+        permissions: {
+          canSubmit,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
 router.get(
   '/',
@@ -123,36 +221,54 @@ const submitSchema = z.object({
 router.post(
   '/:taskId/submit',
   auth,
-  requireRole('staff'),
+  requireRole('admin', 'researcher', 'staff'),
   validateBody(submitSchema),
   async (req, res, next) => {
     try {
       const task = await Task.findOne({
         _id: req.params.taskId,
-        assignee: req.user._id,
-        status: 'open',
+        orgId: req.user.orgId,
       });
 
-      if (!task) {
-        const error = new Error('Task not found or already submitted');
-        error.status = 404;
+      await ensureTaskReadable(req.user, task);
+
+      const assigneeId = toIdString(task.assignee);
+      const userId = req.user._id.toString();
+
+      if (req.user.role === 'staff' && assigneeId !== userId) {
+        const error = new Error('Forbidden');
+        error.status = 403;
         throw error;
       }
 
-      const form = await Form.findById(task.formId);
+      if (req.user.role === 'researcher' && assigneeId !== userId) {
+        const studyId = toIdString(task.studyId);
+        if (studyId) {
+          const study = await Study.findOne({ _id: studyId, orgId: req.user.orgId });
+          const researcherHasAccess =
+            study &&
+            (toIdString(study.createdBy) === userId ||
+              study.assignedStaff.some((memberId) => toIdString(memberId) === userId));
+          if (!researcherHasAccess) {
+            const error = new Error('Forbidden');
+            error.status = 403;
+            throw error;
+          }
+        }
+      }
+
+      const form = await Form.findOne({ _id: task.formId, orgId: req.user.orgId });
       if (!form) {
         const error = new Error('Form not found');
         error.status = 404;
         throw error;
       }
 
-      const study = task.studyId ? await Study.findById(task.studyId) : null;
-
       ensureAnswersSafe(req.validatedBody.answers);
       ensureAnswersMatchSchema(req.validatedBody.answers, form.schema);
 
       const response = await FormResponse.findOneAndUpdate(
-        { formId: form._id, pid: task.pid },
+        { formId: form._id, pid: task.pid, orgId: req.user.orgId },
         {
           studyId: task.studyId,
           orgId: req.user.orgId,
@@ -166,6 +282,12 @@ router.post(
 
       task.status = 'submitted';
       await task.save();
+
+      await task.populate([
+        { path: 'assignee', select: 'displayName email role category' },
+        { path: 'formId' },
+        { path: 'studyId' },
+      ]);
 
       res.json({ task, response });
     } catch (error) {

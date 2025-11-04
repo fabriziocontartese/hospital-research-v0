@@ -5,6 +5,10 @@ const requireRole = (...roles) => (req, _res, next) => {
     return next(error);
   }
 
+  if (req.user.role === 'superadmin') {
+    return next();
+  }
+
   if (!roles.includes(req.user.role)) {
     const error = new Error('Forbidden');
     error.status = 403;
@@ -17,6 +21,10 @@ const requireRole = (...roles) => (req, _res, next) => {
 const scopeStudyAccess = (user, baseQuery = {}) => {
   if (!user) {
     throw new Error('User context missing');
+  }
+
+  if (user.role === 'superadmin') {
+    return baseQuery;
   }
 
   if (user.role === 'admin') {
@@ -48,7 +56,7 @@ const ensureOrgAccess = (user, resourceOrgId) => {
     throw error;
   }
 
-  if (!resourceOrgId || user.role === 'admin') {
+  if (user.role === 'superadmin' || !resourceOrgId || user.role === 'admin') {
     return;
   }
 

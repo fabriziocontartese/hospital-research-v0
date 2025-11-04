@@ -5,9 +5,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import PopulationTable from '../components/PopulationTable';
+import { useAuth } from '../lib/auth';
 import styles from '../styles/PopulationPage.module.css';
 
 const Population = () => {
+  const { user } = useAuth();
+  const canEdit = user.role !== 'staff';
   const queryClient = useQueryClient();
   const [filters, setFilters] = useState({ text: '', category: '' });
   const [includeInactive, setIncludeInactive] = useState(false);
@@ -34,6 +37,7 @@ const Population = () => {
       const response = await apiClient.get('/api/users');
       return response.data.users;
     },
+    enabled: canEdit,
   });
 
   const createPatient = useMutation({
@@ -160,6 +164,7 @@ const Population = () => {
 
   const handleCreateSubmit = (event) => {
     event.preventDefault();
+    if (!canEdit) return;
     setMessage('');
     createPatient.mutate({
       pid: createForm.pid.trim().toUpperCase(),
@@ -169,6 +174,7 @@ const Population = () => {
   };
 
   const handleSavePatient = async (patient, draft) => {
+    if (!canEdit) return;
     setMessage('');
     await updatePatient.mutateAsync({
       pid: patient.pid,
@@ -177,6 +183,10 @@ const Population = () => {
   };
 
   const handleCategoryAdd = (value) => {
+    if (!canEdit) {
+      setCategoryModalMessage('');
+      return;
+    }
     const trimmed = value.trim();
     if (!trimmed) {
       setCategoryModalMessage('Enter a category name to add.');
@@ -197,6 +207,10 @@ const Population = () => {
   };
 
   const handleCategoryRemove = (category) => {
+    if (!canEdit) {
+      setCategoryModalMessage('');
+      return;
+    }
     const normalized = category.toLowerCase();
     const stillInUse = patients.some(
       (patient) => (patient.category || '').toLowerCase() === normalized
@@ -217,35 +231,54 @@ const Population = () => {
 
   return (
     <div className={styles.wrapper}>
+      <div className={styles.banner}>
+        <span className={styles.bannerDot} />
+        <span>
+          <strong>Important:</strong> do not use real patient names. Use pseudonymized IDs only.
+        </span>
+      </div>
+
       <header className={styles.header}>
         <div>
           <h1>Population management</h1>
-          <p>Maintain pseudonymized cohorts, staff assignments, and study enrolments.</p>
+          <p>
+            {canEdit
+              ? 'Maintain pseudonymized cohorts, staff assignments, and study enrolments.'
+              : 'Review the patients and study assignments that relate to your work.'}
+          </p>
         </div>
-        <Button
-          onClick={() => {
-            setMessage('');
-            setCreateForm({ pid: '', category: '', ownerId: '' });
-            setShowCreateModal(true);
-          }}
-        >
-          Register patient
-        </Button>
+        {canEdit ? (
+          <Button
+            onClick={() => {
+              setMessage('');
+              setCreateForm({ pid: '', category: '', ownerId: '' });
+              setShowCreateModal(true);
+            }}
+          >
+            Register patient
+          </Button>
+        ) : (
+          <div className={styles.readOnlyNote}>
+            View-only access
+          </div>
+        )}
       </header>
 
       <Card>
         <CardHeader
           actions={
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setCategoryModalMessage('');
-                setShowCategoriesModal(true);
-              }}
-            >
-              Manage categories
-            </Button>
+            canEdit ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setCategoryModalMessage('');
+                  setShowCategoriesModal(true);
+                }}
+              >
+                Manage categories
+              </Button>
+            ) : null
           }
         >
           <CardTitle>Population roster ({patients.length})</CardTitle>
@@ -301,7 +334,12 @@ const Population = () => {
             </label>
           </div>
 
-          {message ? <div className={styles.feedbackBanner}>{message}</div> : null}
+          {canEdit && message ? <div className={styles.feedbackBanner}>{message}</div> : null}
+          {!canEdit ? (
+            <div className={styles.feedbackBanner}>
+              View-only access. Changes must be requested from an administrator or researcher.
+            </div>
+          ) : null}
 
           {patientsQuery.isLoading ? (
             <div className={styles.emptyState}>Loading patients…</div>
@@ -311,15 +349,16 @@ const Population = () => {
             <PopulationTable
               patients={sortedPatients}
               owners={owners}
-              onSavePatient={handleSavePatient}
+              onSavePatient={canEdit ? handleSavePatient : undefined}
               savingPid={savingPid}
               categories={categories}
+              readOnly={!canEdit}
             />
           )}
         </CardContent>
       </Card>
 
-      {showCreateModal ? (
+      {canEdit && showCreateModal ? (
         <div className={styles.modalBackdrop} onClick={() => setShowCreateModal(false)}>
           <div className={styles.modal} onClick={(event) => event.stopPropagation()}>
             <Card>
@@ -403,7 +442,7 @@ const Population = () => {
         </div>
       ) : null}
 
-      {showCategoriesModal ? (
+      {canEdit && showCategoriesModal ? (
         <div className={styles.modalBackdrop} onClick={closeCategoriesModal}>
           <div className={styles.modal} onClick={(event) => event.stopPropagation()}>
             <Card>

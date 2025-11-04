@@ -43,7 +43,20 @@ const createRefreshToken = async (user) => {
     expiresAt,
   });
 
-  await user.save();
+  try {
+    await user.save();
+  } catch (saveError) {
+    if (saveError?.name === 'ValidationError') {
+      const validationMessages = Object.values(saveError.errors || {}).map(
+        (validationError) => validationError.message
+      );
+      const error = new Error(validationMessages[0] || 'Account configuration invalid');
+      error.status = 403;
+      error.details = validationMessages;
+      throw error;
+    }
+    throw saveError;
+  }
 
   return refreshToken;
 };

@@ -1,0 +1,271 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.headerRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.headerActions {
+  display: flex;
+  flex-direction: row;
+  gap: 12px;
+  align-items: center;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.filters input,
+.filters select {
+  min-width: 200px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--color-border, #d9d9d9);
+  text-align: left;
+  font-size: 14px;
+}
+
+.table tbody tr:hover {
+  background-color: rgba(43, 91, 246, 0.05);
+}
+
+.emptyState {
+  padding: 16px;
+  color: var(--color-text-tertiary);
+  font-size: 14px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.formRow {
+  display: flex;
+  gap: 12px;
+}
+
+.formRow > * {
+  flex: 1;
+}
+
+.formGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.textarea {
+  min-height: 80px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border, #d9d9d9);
+  background: #fff;
+  font-size: 14px;
+  resize: vertical;
+}
+
+.muted {
+  color: var(--color-text-tertiary);
+  font-size: 13px;
+}
+
+.feedback {
+  font-size: 14px;
+  color: var(--color-success);
+}
+
+.feedbackBanner {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+  font-size: 14px;
+}
+
+.error {
+  font-size: 14px;
+  color: var(--color-danger);
+}
+
+.errorBanner {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(185, 28, 28, 0.12);
+  color: #991b1b;
+  font-size: 14px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--color-surface-muted);
+  color: var(--color-primary);
+}
+
+.statusApproved {
+  background: rgba(16, 185, 129, 0.1);
+  color: #047857;
+}
+
+.statusPending {
+  background: rgba(245, 158, 11, 0.15);
+  color: #b45309;
+}
+
+.statusRejected {
+  background: rgba(248, 113, 113, 0.15);
+  color: #b91c1c;
+}
+
+.statusSuspended {
+  background: rgba(107, 114, 128, 0.15);
+  color: #374151;
+}
+
+.selectionInfo {
+  font-size: 13px;
+  color: var(--color-text-tertiary);
+}
+
+.toggleGroup {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.checkboxRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 14px;
+}
+
+.divider {
+  height: 1px;
+  background: var(--color-border, #d9d9d9);
+  margin: 12px 0;
+}
+
+.modalBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 60;
+}
+
+.modalContainer {
+  width: min(95vw, 720px);
+  max-height: 90vh;
+  display: flex;
+}
+
+.modalCard {
+  width: 100%;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modalSubtitle {
+  margin-top: 4px;
+  font-size: 14px;
+  color: var(--color-text-tertiary);
+}
+
+.modalContent {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  overflow-y: auto;
+  padding-right: 4px;
+  flex: 1;
+}
+
+.modalSection {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.modalSectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modalEmpty {
+  padding: 16px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.04);
+  color: var(--color-text-tertiary);
+  font-size: 14px;
+}
+
+.modalForm {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.modalActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.adminTable {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.adminTable th,
+.adminTable td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--color-border, #d9d9d9);
+  font-size: 13px;
+  text-align: left;
+}
+
+.dangerButton {
+  color: #b91c1c;
+  border-color: rgba(185, 28, 28, 0.3);
+}
+
+.dangerButton:hover:not(:disabled) {
+  background: rgba(185, 28, 28, 0.08);
+  border-color: rgba(185, 28, 28, 0.45);
+}

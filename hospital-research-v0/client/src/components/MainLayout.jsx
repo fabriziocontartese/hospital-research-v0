@@ -7,12 +7,20 @@ import styles from './MainLayout.module.css';
 import { cn } from '../lib/classNames';
 
 const navItems = [
-  { path: '/dashboard', label: 'Dashboard', roles: ['admin', 'researcher', 'staff'] },
-  { path: '/users', label: 'Users', roles: ['admin'] },
-  { path: '/studies', label: 'Studies', roles: ['admin', 'researcher'] },
-  { path: '/population', label: 'Population', roles: ['admin', 'researcher'] },
+  { path: '/platform/organizations', label: 'Organizations', roles: ['superadmin'] },
+  { path: '/dashboard', label: 'Dashboard', roles: ['admin', 'researcher'] },
   { path: '/tasks', label: 'Tasks', roles: ['admin', 'researcher', 'staff'] },
+  { path: '/studies', label: 'Studies', roles: ['admin', 'researcher'] },
+  { path: '/population', label: 'Population', roles: ['admin', 'researcher', 'staff'] },
+  { path: '/users', label: 'Users', roles: ['admin'] },
 ];
+
+const roleLabels = {
+  superadmin: 'Super Admin',
+  admin: 'Admin',
+  researcher: 'Researcher',
+  staff: 'Staff',
+};
 
 export const MainLayout = ({ children }) => {
   const { user, logout } = useAuth();
@@ -21,6 +29,8 @@ export const MainLayout = ({ children }) => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const visibleNav = navItems.filter((item) => item.roles.includes(user.role));
+  const homePath =
+    visibleNav.length > 0 ? visibleNav[0].path : user.role === 'staff' ? '/tasks' : '/dashboard';
 
   const handleSignOut = () => {
     logout();
@@ -37,7 +47,7 @@ export const MainLayout = ({ children }) => {
       ) : null}
 
       <aside className={cn(styles.sidebar, isMobileMenuOpen && styles.sidebarOpen)}>
-        <div className={styles.brand} onClick={() => navigate('/dashboard')}>
+        <div className={styles.brand} onClick={() => navigate(homePath)}>
           <div className={styles.logo}>HR</div>
           <div>
             <div className={styles.brandTitle}>Research Console</div>
@@ -72,8 +82,10 @@ export const MainLayout = ({ children }) => {
             </div>
             <div className={styles.userMeta}>
               <span className={styles.userName}>{user.displayName || user.email}</span>
-              <span className={styles.userRole}>{user.role}</span>
-              {user.category ? <Badge variant="neutral">{user.category}</Badge> : null}
+              <span className={styles.userRole}>{roleLabels[user.role] || user.role}</span>
+              {user.role !== 'superadmin' && user.category ? (
+                <Badge variant="neutral">{user.category}</Badge>
+              ) : null}
             </div>
           </div>
           <Button variant="ghost" className={styles.signOut} onClick={handleSignOut}>
@@ -97,13 +109,6 @@ export const MainLayout = ({ children }) => {
             {isMobileMenuOpen ? 'Close' : 'Menu'}
           </Button>
         </header>
-
-        <div className={styles.banner}>
-          <span className={styles.bannerDot} />
-          <span>
-            <strong>Important:</strong> do not use real patient names. Use pseudonymized IDs only.
-          </span>
-        </div>
 
         <main className={styles.content}>{children}</main>
       </div>

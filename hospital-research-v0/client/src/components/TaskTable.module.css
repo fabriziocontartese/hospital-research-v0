@@ -4,7 +4,8 @@
   background: var(--color-surface);
   border-radius: var(--radius-md);
   overflow: hidden;
-  box-shadow: var(--shadow-soft);
+  box-shadow: none;
+  min-width: 760px;
 }
 
 .table th,
@@ -36,4 +37,49 @@
   text-align: center;
   padding: 1.5rem 1rem;
   color: var(--color-text-tertiary);
+}
+
+.tableWrapper {
+  width: 100%;
+  overflow-x: auto;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-soft);
+  background: var(--color-surface);
+}
+
+.tableWrapper table {
+  box-shadow: none;
+}
+
+.idCell {
+  width: 3rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.patientCell {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.studyFormCell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.studyLabel {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.formLabel {
+  color: var(--color-text-secondary);
+  font-size: 0.85rem;
+}
+
+@media (max-width: 720px) {
+  .table {
+    min-width: 640px;
+  }
 }

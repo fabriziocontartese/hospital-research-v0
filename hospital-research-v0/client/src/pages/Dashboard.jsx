@@ -98,7 +98,7 @@ const Dashboard = () => {
       </header>
 
       <p className={styles.headerBlurb}>
-        Monitor study activity, follow up on outstanding tasks, and keep your research cohorts organised.
+        Overview of ongoing research and patients.
       </p>
 
       {/* Lean, left-to-right compact stats */}

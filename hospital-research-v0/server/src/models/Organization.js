@@ -6,7 +6,8 @@ const organizationSchema = new mongoose.Schema(
     country: { type: String, required: true },
     contactEmail: { type: String, required: true },
     message: { type: String },
-    status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+    status: { type: String, enum: ['pending', 'approved', 'rejected', 'suspended'], default: 'pending' },
+    isActive: { type: Boolean, default: true },
   },
   { timestamps: true }
 );

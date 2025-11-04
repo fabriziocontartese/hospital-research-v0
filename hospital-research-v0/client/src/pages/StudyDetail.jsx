@@ -549,7 +549,7 @@ const StudyDetail = () => {
                     <div key={form._id} className={styles.formRow}>
                       <div>
                         <h4>{form.schema?.title || form.version}</h4>
-                        <p>{form.schema?.items?.length || 0} questions · Version {form.version}</p>
+                        <p>{form.schema?.items?.length || 0} questions · Deadline {form.version || '—'}</p>
                       </div>
                       <Button
                         variant="outline"
@@ -849,7 +849,7 @@ const StudyDetail = () => {
                 {formViewer.mode === 'preview' ? (
                   <div className={styles.formPreview}>
                     <div className={styles.formPreviewMeta}>
-                      <span>Version {formViewer.form.version}</span>
+                      <span>Deadline {formViewer.form.version || '—'}</span>
                       <span>{formViewer.form.schema?.items?.length || 0} questions</span>
                     </div>
                     <ol className={styles.previewList}>

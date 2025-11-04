@@ -146,7 +146,13 @@ const Patient = () => {
           {tasksQuery.isLoading ? (
             <div className={styles.emptyState}>Loading tasks…</div>
           ) : (
-            <TaskTable tasks={tasks} showAssignee onOpenForm={(task) => navigate(`/forms/${task.formId?._id || task.formId}?taskId=${task._id}&pid=${task.pid}`)} />
+            <TaskTable
+              tasks={tasks}
+              showAssignee
+              onSelectTask={(task) =>
+                navigate(`/forms/${task.formId?._id || task.formId}?taskId=${task._id}&pid=${task.pid}`)
+              }
+            />
           )}
         </CardContent>
       </Card>

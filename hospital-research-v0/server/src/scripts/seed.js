@@ -11,11 +11,27 @@ const Task = require('../models/Task');
 
 const DEFAULT_PASSWORD = process.env.SEED_DEFAULT_PASSWORD || 'ChangeMe123!';
 
+const FORCE_PASSWORD_RESET =
+  (process.env.SEED_FORCE_PASSWORD_RESET || process.env.SEED_RESET_PASSWORD || '').toLowerCase() ===
+  'true';
+
 const ensureUser = async ({ email, role, displayName, category, orgId }) => {
   const existing = await User.findOne({ email });
   if (existing) {
+    let shouldSave = false;
     if (category && existing.category !== category) {
       existing.category = category;
+      shouldSave = true;
+    }
+    if (FORCE_PASSWORD_RESET) {
+      existing.passwordHash = await argon2.hash(DEFAULT_PASSWORD);
+      existing.isActive = true;
+      shouldSave = true;
+      console.log(
+        `Reset password for ${email} (${role}) to default ${DEFAULT_PASSWORD} (SEED_FORCE_PASSWORD_RESET)`
+      );
+    }
+    if (shouldSave) {
       await existing.save();
     }
     return existing;
@@ -37,6 +53,12 @@ const ensureUser = async ({ email, role, displayName, category, orgId }) => {
 const seed = async () => {
   await connectDb();
 
+  await ensureUser({
+    email: process.env.SEED_SUPERADMIN_EMAIL || 'founder@hospitalresearch.example',
+    role: 'superadmin',
+    displayName: 'Platform Owner',
+  });
+
   const org = await Organization.findOneAndUpdate(
     { name: 'Pioneer Health Research' },
     {
@@ -44,6 +66,7 @@ const seed = async () => {
       country: 'US',
       contactEmail: 'admin@pioneer.example',
       status: 'approved',
+      isActive: true,
     },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );

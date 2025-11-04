@@ -22,13 +22,18 @@ const listQuerySchema = z.object({
 router.get(
   '/',
   auth,
-  requireRole('admin', 'researcher'),
+  requireRole('admin', 'researcher', 'staff'),
   validateQuery(listQuerySchema),
   async (req, res, next) => {
     try {
       const filter = {
         orgId: req.user.orgId,
       };
+
+      if (req.user.role === 'staff') {
+        filter.assignedStaff = req.user._id;
+      }
+
       if (req.validatedQuery.cohortTags) {
         filter.cohortTags = { $all: req.validatedQuery.cohortTags.split(',').map((tag) => tag.trim()) };
       }

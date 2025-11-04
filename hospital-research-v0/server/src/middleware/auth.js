@@ -1,5 +1,6 @@
 const { verifyAccessToken } = require('../utils/jwt');
 const User = require('../models/User');
+const Organization = require('../models/Organization');
 
 const authMiddleware = async (req, _res, next) => {
   const header = req.headers.authorization || '';
@@ -18,6 +19,14 @@ const authMiddleware = async (req, _res, next) => {
       const error = new Error('Invalid user session');
       error.status = 401;
       throw error;
+    }
+    if (user.role !== 'superadmin') {
+      const org = await Organization.findById(user.orgId);
+      if (!org || !org.isActive || org.status !== 'approved') {
+        const error = new Error('Organization is not active');
+        error.status = 403;
+        throw error;
+      }
     }
     req.auth = decoded;
     req.user = user;

@@ -24,15 +24,13 @@ const Tasks = () => {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('all');
   const [studyFilter, setStudyFilter] = useState('all');
+  const [hideCompleted, setHideCompleted] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
 
   const tasksQuery = useQuery({
-    queryKey: ['tasks', status, studyFilter],
+    queryKey: ['tasks'],
     queryFn: async () => {
-      const params = {};
-      if (status !== 'all') params.status = status;
-      if (studyFilter !== 'all') params.studyId = studyFilter;
-      const response = await apiClient.get('/api/tasks', { params });
+      const response = await apiClient.get('/api/tasks');
       return response.data.tasks;
     },
   });
@@ -51,8 +49,20 @@ const Tasks = () => {
 
   const filteredTasks = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!query) return tasks;
     return tasks.filter((task) => {
+      if (status !== 'all' && task.status !== status) {
+        return false;
+      }
+      if (hideCompleted && task.status === 'submitted') {
+        return false;
+      }
+      if (studyFilter !== 'all') {
+        const studyId = task.studyId?._id || task.studyId;
+        if (!studyId || String(studyId) !== studyFilter) {
+          return false;
+        }
+      }
+      if (!query) return true;
       const formName = task.formId?.schema?.title || task.formId?.version || '';
       const studyName = task.studyId?.title || '';
       return (
@@ -61,7 +71,7 @@ const Tasks = () => {
         task.pid?.toLowerCase().includes(query)
       );
     });
-  }, [tasks, search]);
+  }, [tasks, search, status, studyFilter, hideCompleted]);
 
   const sortedTasks = useMemo(() => {
     const copy = [...filteredTasks];
@@ -77,16 +87,27 @@ const Tasks = () => {
   }, [filteredTasks]);
 
   const stats = useMemo(() => {
-    const pending = filteredTasks.filter((task) => task.status === 'open').length;
-    const overdue = filteredTasks.filter((task) => task.status === 'expired').length;
-    const completed = filteredTasks.filter((task) => task.status === 'submitted').length;
-    return { total: filteredTasks.length, pending, overdue, completed };
-  }, [filteredTasks]);
+    const pending = tasks.filter((task) => task.status === 'open').length;
+    const overdue = tasks.filter((task) => task.status === 'expired').length;
+    const completed = tasks.filter((task) => task.status === 'submitted').length;
+    return { total: tasks.length, pending, overdue, completed };
+  }, [tasks]);
 
   const studyOptions = useMemo(() => {
-    if (!studies.length) return [];
-    return studies.map((study) => ({ id: study._id, title: study.title }));
-  }, [studies]);
+    if (studies.length) {
+      return studies.map((study) => ({ id: String(study._id), title: study.title }));
+    }
+    const map = new Map();
+    tasks.forEach((task) => {
+      const study = task.studyId;
+      const id = String(study?._id || study || '');
+      const title = study?.title;
+      if (id && title && !map.has(id)) {
+        map.set(id, { id, title });
+      }
+    });
+    return Array.from(map.values());
+  }, [studies, tasks]);
 
   const openTaskModal = (task) => {
     setSelectedTask(task);
@@ -123,7 +144,7 @@ const Tasks = () => {
         <Card>
           <CardHeader>
             <CardTitle>Total tasks</CardTitle>
-            <CardDescription>Current results after filters.</CardDescription>
+            <CardDescription>All assignments in your scope.</CardDescription>
           </CardHeader>
           <CardContent>
             <div className={styles.statValue}>{stats.total}</div>
@@ -194,6 +215,14 @@ const Tasks = () => {
                 ))}
               </select>
             </label>
+            <label className={styles.filterToggle}>
+              <input
+                type="checkbox"
+                checked={hideCompleted}
+                onChange={(event) => setHideCompleted(event.target.checked)}
+              />
+              <span>Exclude completed</span>
+            </label>
             <div className={styles.filterAction}>
               <Button
                 variant="ghost"
@@ -202,6 +231,7 @@ const Tasks = () => {
                   setSearch('');
                   setStatus('all');
                   setStudyFilter('all');
+                  setHideCompleted(false);
                 }}
               >
                 Reset

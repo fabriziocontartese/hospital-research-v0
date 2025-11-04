@@ -14,8 +14,20 @@ const userSchema = new mongoose.Schema(
   {
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     passwordHash: { type: String, required: true },
-    role: { type: String, enum: ['admin', 'researcher', 'staff'], required: true },
-    orgId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', required: true },
+    role: { type: String, enum: ['superadmin', 'admin', 'researcher', 'staff'], required: true },
+    orgId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Organization',
+      validate: {
+        validator(value) {
+          if (this.role === 'superadmin') {
+            return value === undefined || value === null;
+          }
+          return value != null;
+        },
+        message: 'Organization is required for non-superadmin users',
+      },
+    },
     isActive: { type: Boolean, default: true },
     displayName: { type: String },
     category: { type: String },

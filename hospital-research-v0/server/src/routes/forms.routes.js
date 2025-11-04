@@ -55,7 +55,7 @@ const ensureFormReadAccess = async (user, form) => {
     const task = await Task.findOne({
       formId: form._id,
       assignee: user._id,
-      status: 'open',
+      orgId: user.orgId,
     });
     if (!task) {
       const error = new Error('Forbidden');

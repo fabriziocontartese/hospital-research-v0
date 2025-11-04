@@ -14,7 +14,8 @@ export const ProtectedRoute = ({ allowedRoles, children, fallbackPath }) => {
   }
 
   if (allowedRoles && !allowedRoles.includes(user.role)) {
-    const target = fallbackPath || '/dashboard';
+    const defaultFallback = user.role === 'superadmin' ? '/platform/organizations' : '/dashboard';
+    const target = fallbackPath || defaultFallback;
     return <Navigate to={target} replace />;
   }
 

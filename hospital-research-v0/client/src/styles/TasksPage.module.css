@@ -62,6 +62,19 @@
   font-size: 0.9rem;
 }
 
+.filters label.filterToggle {
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+}
+
+.filterToggle input {
+  width: 1rem;
+  height: 1rem;
+}
+
 .filters select {
   padding: 0.6rem 0.75rem;
   border-radius: var(--radius-sm);

@@ -16,13 +16,17 @@ const TaskTable = ({ tasks, onSelectTask, showAssignee = false }) => {
     return <div className={styles.emptyState}>No tasks found.</div>;
   }
 
+  const isSubmittedStatus = (status) =>
+    typeof status === 'string' && status.toLowerCase() === 'submitted';
+
   return (
-    <table className={styles.table}>
+    <div className={styles.tableWrapper}>
+      <table className={styles.table}>
       <thead>
         <tr>
-          <th>Study</th>
-          <th>Form</th>
+          <th>ID</th>
           <th>Patient</th>
+          <th>Study &amp; form</th>
           <th>Due</th>
           <th>Status</th>
           {showAssignee ? <th>Assignee</th> : null}
@@ -30,29 +34,40 @@ const TaskTable = ({ tasks, onSelectTask, showAssignee = false }) => {
         </tr>
       </thead>
       <tbody>
-        {tasks.map((task) => (
-          <tr key={task._id}>
-            <td>{task.studyId?.title || '—'}</td>
-            <td>{task.formId?.schema?.title || task.formId?.version}</td>
-            <td className={styles.mono}>{task.pid}</td>
-            <td>{task.dueAt ? new Date(task.dueAt).toLocaleDateString() : '—'}</td>
-            <td>
-              <Badge variant={statusVariant(task.status)}>{statusLabel(task.status)}</Badge>
-            </td>
-            {showAssignee ? (
-              <td>{task.assignee?.displayName || task.assignee?.email || '—'}</td>
-            ) : null}
-            {onSelectTask ? (
-              <td>
-                <Button size="sm" variant="primary" onClick={() => onSelectTask(task)}>
-                  {task.status === 'submitted' || task.status === 'Completed' ? 'View response' : 'Open form'}
-                </Button>
+        {tasks.map((task, index) => {
+          const studyTitle = task.studyId?.title || '—';
+          const formTitle = task.formId?.schema?.title || task.formId?.version || '—';
+          const dueDate = task.dueAt ? new Date(task.dueAt).toLocaleDateString() : '—';
+          return (
+            <tr key={task._id}>
+              <td className={styles.idCell}>{index + 1}</td>
+              <td className={styles.patientCell}>
+                <span className={styles.mono}>{task.pid}</span>
               </td>
-            ) : null}
-          </tr>
-        ))}
+              <td className={styles.studyFormCell}>
+                <span className={styles.studyLabel}>{studyTitle}</span>
+                <span className={styles.formLabel}>{formTitle}</span>
+              </td>
+              <td>{dueDate}</td>
+              <td>
+                <Badge variant={statusVariant(task.status)}>{statusLabel(task.status)}</Badge>
+              </td>
+              {showAssignee ? (
+                <td>{task.assignee?.displayName || task.assignee?.email || '—'}</td>
+              ) : null}
+              {onSelectTask ? (
+                <td>
+                  <Button size="sm" variant="primary" onClick={() => onSelectTask(task)}>
+                    {isSubmittedStatus(task.status) ? 'Edit response' : 'Open form'}
+                  </Button>
+                </td>
+              ) : null}
+            </tr>
+          );
+        })}
       </tbody>
-    </table>
+      </table>
+    </div>
   );
 };
 

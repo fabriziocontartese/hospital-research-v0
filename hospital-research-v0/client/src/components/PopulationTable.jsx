@@ -9,9 +9,17 @@ const statusOptions = [
   { value: 'inactive', label: 'Inactive' },
 ];
 
-const PopulationTable = ({ patients, owners, categories = [], onSavePatient, savingPid }) => {
+const PopulationTable = ({
+  patients,
+  owners,
+  categories = [],
+  onSavePatient,
+  savingPid,
+  readOnly = false,
+}) => {
   const [editingPid, setEditingPid] = useState(null);
   const [draft, setDraft] = useState(null);
+  const actionsAvailable = !readOnly && typeof onSavePatient === 'function';
 
   if (!patients.length) {
     return <div className={styles.emptyState}>No patients found.</div>;
@@ -21,6 +29,7 @@ const PopulationTable = ({ patients, owners, categories = [], onSavePatient, sav
     patient.status || (patient.isActive === false ? 'inactive' : 'active');
 
   const startEdit = (patient) => {
+    if (!actionsAvailable) return;
     setEditingPid(patient.pid);
     const ownerEntry = patient.assignedStaff?.[0];
     const ownerId =
@@ -43,7 +52,7 @@ const PopulationTable = ({ patients, owners, categories = [], onSavePatient, sav
   };
 
   const handleSave = async (patient) => {
-    if (!draft || !onSavePatient) return;
+    if (!actionsAvailable || !draft || !onSavePatient) return;
 
     const payload = {
       category: draft.category || null,
@@ -72,7 +81,7 @@ const PopulationTable = ({ patients, owners, categories = [], onSavePatient, sav
           <th>Category</th>
           <th>Owner</th>
           <th>Status</th>
-          <th />
+          {actionsAvailable ? <th /> : null}
         </tr>
       </thead>
       <tbody>
@@ -157,32 +166,34 @@ const PopulationTable = ({ patients, owners, categories = [], onSavePatient, sav
                   </Badge>
                 )}
               </td>
-              <td className={styles.actionsCell}>
-                {isEditing ? (
-                  <div className={styles.actionGroup}>
-                    <Button
-                      size="sm"
-                      onClick={() => handleSave(patient)}
-                      disabled={isSaving}
-                    >
-                      {isSaving ? 'Saving…' : 'Save'}
+              {actionsAvailable ? (
+                <td className={styles.actionsCell}>
+                  {isEditing ? (
+                    <div className={styles.actionGroup}>
+                      <Button
+                        size="sm"
+                        onClick={() => handleSave(patient)}
+                        disabled={isSaving}
+                      >
+                        {isSaving ? 'Saving…' : 'Save'}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={cancelEdit}
+                        disabled={isSaving}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button size="sm" variant="secondary" onClick={() => startEdit(patient)}>
+                      Edit
                     </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      onClick={cancelEdit}
-                      disabled={isSaving}
-                    >
-                      Cancel
-                    </Button>
-                  </div>
-                ) : (
-                  <Button size="sm" variant="secondary" onClick={() => startEdit(patient)}>
-                    Edit
-                  </Button>
-                )}
-              </td>
+                  )}
+                </td>
+              ) : null}
             </tr>
           );
         })}

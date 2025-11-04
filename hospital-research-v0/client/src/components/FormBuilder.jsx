@@ -55,7 +55,7 @@ const FormBuilder = ({ initialSchema, onSave, onCancel, submitLabel }) => {
   const [metadata, setMetadata] = useState({
     id: '',
     title: '',
-    version: '1.0',
+    deadline: '',
   });
 
   const [items, setItems] = useState([normaliseItem(null, 0)]);
@@ -65,7 +65,7 @@ const FormBuilder = ({ initialSchema, onSave, onCancel, submitLabel }) => {
     setMetadata({
       id: initialSchema.id || '',
       title: initialSchema.title || '',
-      version: initialSchema.version || '1.0',
+      deadline: initialSchema.version || '',
     });
     setItems((initialSchema.items || []).map((item, index) => normaliseItem(item, index)));
   }, [initialSchema]);
@@ -176,7 +176,7 @@ const FormBuilder = ({ initialSchema, onSave, onCancel, submitLabel }) => {
     const schema = {
       id: metadata.id.trim() || 'form-id',
       title: metadata.title.trim() || 'Untitled form',
-      version: metadata.version.trim() || '1.0',
+      version: metadata.deadline.trim() || 'No deadline',
       items: items.map((item, index) => ({
         linkId: item.linkId || `question-${index + 1}`,
         text: item.text.trim() || `Question ${index + 1}`,
@@ -210,11 +210,11 @@ const FormBuilder = ({ initialSchema, onSave, onCancel, submitLabel }) => {
           />
         </label>
         <label>
-          Version
+          Deadline
           <input
-            value={metadata.version}
-            onChange={(event) => setMetadata((prev) => ({ ...prev, version: event.target.value }))}
-            required
+            value={metadata.deadline}
+            onChange={(event) => setMetadata((prev) => ({ ...prev, deadline: event.target.value }))}
+            placeholder="YYYY-MM-DD"
           />
         </label>
       </div>
