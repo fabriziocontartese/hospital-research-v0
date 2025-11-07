@@ -17,6 +17,7 @@ const authMiddleware = async (req, _res, next) => {
 
   try {
     const decoded = verifyAccessToken(token);
+    console.log('Decoded token:', decoded); // Debugging log
     const user = await User.findById(decoded.sub);
     if (!user || !user.isActive) {
       console.error('Invalid user session'); // Debugging log
