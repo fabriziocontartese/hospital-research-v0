@@ -1,5 +1,15 @@
 const { Schema, model } = require('mongoose');
 
+const refreshTokenSchema = new Schema(
+  {
+    tokenId: { type: String, required: true },
+    tokenHash: { type: String, required: true },
+    createdAt: { type: Date, required: true },
+    expiresAt: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
 const userSchema = new Schema(
   {
     email: {
@@ -9,12 +19,10 @@ const userSchema = new Schema(
       lowercase: true,
       trim: true,
     },
-    // rest of the code expects `passwordHash` (argon2 hashes)
     passwordHash: {
       type: String,
       required: [true, 'Password hash is required.'],
     },
-    // the codebase uses `displayName` in several places
     displayName: {
       type: String,
       required: [true, 'Display name is required.'],
@@ -37,6 +45,10 @@ const userSchema = new Schema(
     isActive: {
       type: Boolean,
       default: true,
+    },
+    refreshTokens: {
+      type: [refreshTokenSchema],
+      default: [],
     },
   },
   {

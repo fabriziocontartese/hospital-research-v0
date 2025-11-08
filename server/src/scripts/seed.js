@@ -10,10 +10,8 @@ const Form = require('../models/Form');
 const Task = require('../models/Task');
 
 const DEFAULT_PASSWORD = process.env.SEED_DEFAULT_PASSWORD || 'ChangeMe123!';
-
 const FORCE_PASSWORD_RESET =
-  (process.env.SEED_FORCE_PASSWORD_RESET || process.env.SEED_RESET_PASSWORD || '').toLowerCase() ===
-  'true';
+  (process.env.SEED_FORCE_PASSWORD_RESET || process.env.SEED_RESET_PASSWORD || '').toLowerCase() === 'true';
 
 const ensureUser = async ({ email, role, displayName, category, orgId }) => {
   const existing = await User.findOne({ email });
@@ -27,13 +25,9 @@ const ensureUser = async ({ email, role, displayName, category, orgId }) => {
       existing.passwordHash = await argon2.hash(DEFAULT_PASSWORD);
       existing.isActive = true;
       shouldSave = true;
-      console.log(
-        `Reset password for ${email} (${role}) to default ${DEFAULT_PASSWORD} (SEED_FORCE_PASSWORD_RESET)`
-      );
+      console.log(`Reset password for ${email} (${role}) to default ${DEFAULT_PASSWORD}`);
     }
-    if (shouldSave) {
-      await existing.save();
-    }
+    if (shouldSave) await existing.save();
     return existing;
   }
   const passwordHash = await argon2.hash(DEFAULT_PASSWORD);
@@ -53,12 +47,14 @@ const ensureUser = async ({ email, role, displayName, category, orgId }) => {
 const seed = async () => {
   await connectDb();
 
+  // platform superadmin
   await ensureUser({
-    email: process.env.SEED_SUPERADMIN_EMAIL || 'founder@hospitalresearch.example',
+    email: process.env.SEED_SUPERADMIN_EMAIL || 'superadmin@example.com',
     role: 'superadmin',
     displayName: 'Platform Owner',
   });
 
+  // baseline org
   const org = await Organization.findOneAndUpdate(
     { name: 'Pioneer Health Research' },
     {
@@ -96,7 +92,6 @@ const seed = async () => {
   });
 
   const patientIds = ['P0001', 'P0002', 'P0003', 'P0004', 'P0005'];
-  // eslint-disable-next-line no-restricted-syntax
   for (const pid of patientIds) {
     // eslint-disable-next-line no-await-in-loop
     await Patient.findOneAndUpdate(
@@ -139,18 +134,8 @@ const seed = async () => {
         id: 'base-form',
         title: 'Baseline Intake',
         items: [
-          {
-            linkId: 'consent-1',
-            text: 'Consent obtained?',
-            type: 'dropdown',
-            options: ['Yes', 'No'],
-            required: true,
-          },
-          {
-            linkId: 'notes-2',
-            text: 'Initial notes',
-            type: 'text',
-          },
+          { linkId: 'consent-1', text: 'Consent obtained?', type: 'dropdown', options: ['Yes', 'No'], required: true },
+          { linkId: 'notes-2', text: 'Initial notes', type: 'text' },
         ],
       },
       createdBy: admin._id,
@@ -175,25 +160,9 @@ const seed = async () => {
         id: 'study-form',
         title: 'Vitals Follow-up',
         items: [
-          {
-            linkId: 'bp-1',
-            text: 'Blood pressure (systolic/diastolic)',
-            type: 'text',
-            required: true,
-          },
-          {
-            linkId: 'symptoms-2',
-            text: 'Symptoms experienced since last visit',
-            type: 'checkboxes',
-            options: ['Fatigue', 'Shortness of breath', 'Dizziness', 'Other'],
-          },
-          {
-            linkId: 'recovery-scale-3',
-            text: 'Recovery progress',
-            type: 'scale',
-            scale: { min: 1, max: 5, step: 1 },
-            required: true,
-          },
+          { linkId: 'bp-1', text: 'Blood pressure (systolic/diastolic)', type: 'text', required: true },
+          { linkId: 'symptoms-2', text: 'Symptoms since last visit', type: 'checkboxes', options: ['Fatigue', 'Shortness of breath', 'Dizziness', 'Other'] },
+          { linkId: 'recovery-scale-3', text: 'Recovery progress', type: 'scale', scale: { min: 1, max: 5, step: 1 }, required: true },
         ],
       },
       createdBy: researcher._id,
@@ -203,8 +172,7 @@ const seed = async () => {
   );
 
   await Task.deleteMany({ studyId: study._id, formId: studyForm._id });
-  const dueDate = new Date();
-  dueDate.setDate(dueDate.getDate() + 7);
+  const dueDate = new Date(); dueDate.setDate(dueDate.getDate() + 7);
 
   await Task.insertMany(
     patientIds.map((pid) => ({

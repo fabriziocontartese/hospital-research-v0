@@ -6,13 +6,12 @@ const organizationSchema = new mongoose.Schema(
     country: { type: String, required: true },
     contactEmail: { type: String, required: true },
     message: { type: String },
-    status: { type: String, enum: ['pending', 'approved', 'rejected', 'suspended'], default: 'pending' },
-    isActive: { type: Boolean, default: true },
-    admin: {
-      email: { type: String },
-      displayName: { type: String },
-      password: { type: String }, // Added password field for admin
+    status: {
+      type: String,
+      enum: ['pending', 'approved', 'rejected', 'suspended'],
+      default: 'pending',
     },
+    isActive: { type: Boolean, default: true },
   },
   { timestamps: true }
 );
