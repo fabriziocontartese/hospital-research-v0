@@ -60,8 +60,7 @@
   width: 42px;
   height: 42px;
   border-radius: 12px;
-  background: var(--color-primary);
-  color: var(--color-text-inverse);
+  background: #000;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -70,8 +69,10 @@
   box-shadow: 0 12px 24px rgba(43, 91, 246, 0.24);
 }
 
-.brandTitle { font-size: 1.05rem; font-weight: 600; color: var(--color-text-primary); }
-.brandSubtitle { font-size: 0.85rem; color: var(--color-text-tertiary); }
+.logo svg {
+  color: white;
+}
+
 
 /* Nav */
 .nav {

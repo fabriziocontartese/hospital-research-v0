@@ -8,6 +8,7 @@ import { Button } from '../components/ui/Button';
 import authStyles from '../styles/AuthPage.module.css';
 
 const landingByRole = {
+  superadmin: '/platform/organizations',
   admin: '/dashboard',
   researcher: '/dashboard',
   staff: '/tasks',
@@ -31,10 +32,10 @@ const Login = () => {
         refreshToken: data.refreshToken,
         user: data.user,
       });
-      localStorage.setItem('authToken', data.accessToken); // Save token to localStorage
-      console.log('Token saved to localStorage:', data.accessToken); // Debugging log
       const redirectTo =
-        (location.state && location.state.from?.pathname) || landingByRole[data.user.role] || '/dashboard';
+        (location.state && location.state.from?.pathname) ||
+        landingByRole[data.user.role] ||
+        '/dashboard';
       navigate(redirectTo, { replace: true });
     },
     onError: (err) => {
@@ -68,7 +69,7 @@ const Login = () => {
               type="email"
               autoComplete="email"
               value={formState.email}
-              onChange={(event) => setFormState((prev) => ({ ...prev, email: event.target.value }))}
+              onChange={(e) => setFormState((prev) => ({ ...prev, email: e.target.value }))}
               required
               placeholder="researcher@example.org"
             />
@@ -83,7 +84,7 @@ const Login = () => {
               type="password"
               autoComplete="current-password"
               value={formState.password}
-              onChange={(event) => setFormState((prev) => ({ ...prev, password: event.target.value }))}
+              onChange={(e) => setFormState((prev) => ({ ...prev, password: e.target.value }))}
               required
               placeholder="••••••••"
             />

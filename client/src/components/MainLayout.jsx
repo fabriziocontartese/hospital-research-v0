@@ -48,11 +48,28 @@ export const MainLayout = ({ children }) => {
 
       <aside className={cn(styles.sidebar, isMobileMenuOpen && styles.sidebarOpen)}>
         <div className={styles.brand} onClick={() => navigate(homePath)}>
-          <div className={styles.logo}>HR</div>
-          <div>
-            <div className={styles.brandTitle}>Research Console</div>
-            <div className={styles.brandSubtitle}>Hospital Research</div>
-          </div>
+        <div className={styles.logo}>
+          <svg
+            width="22"
+            height="22"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="white"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            role="img"
+            aria-label="Research"
+          >
+            <circle cx="11" cy="11" r="5" />
+            <line x1="14.8" y1="14.8" x2="19.2" y2="19.2" />
+          </svg>
+        </div>
+
+
+
+
+            <div className={styles.brandTitle}>Hospital Research</div>
         </div>
 
         <nav className={styles.nav}>
@@ -97,8 +114,8 @@ export const MainLayout = ({ children }) => {
       <div className={styles.mainRegion}>
         <header className={styles.mobileHeader}>
           <div className={styles.mobileBrand}>
-            <div className={styles.logo}>HR</div>
-            <span>Research Console</span>
+            <div className={styles.logo}></div>
+            <span>Hospital Research</span>
           </div>
           <Button
             size="sm"

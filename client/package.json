@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "private": true,
   "engines": { "node": "18.x" },
-  "proxy": "http://localhost:5005",
   "dependencies": {
     "@tanstack/react-query": "^5.59.19",
     "@tanstack/react-query-devtools": "^5.59.19",
@@ -20,9 +19,7 @@
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
-  "eslintConfig": {
-    "extends": ["react-app", "react-app/jest"]
-  },
+  "eslintConfig": { "extends": ["react-app", "react-app/jest"] },
   "browserslist": {
     "production": [">0.2%", "not dead", "not op_mini all"],
     "development": ["last 1 chrome version", "last 1 firefox version", "last 1 safari version"]

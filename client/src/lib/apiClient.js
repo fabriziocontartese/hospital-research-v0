@@ -1,27 +1,66 @@
 import axios from 'axios';
 
-/**
- * CRA uses process.env.REACT_APP_* at build time.
- * Netlify: set REACT_APP_API_BASE to your Render API base URL.
- */
-const baseURL = (process.env.REACT_APP_API_BASE || '/api').trim();
+// Prefer explicit env; otherwise assume CRA dev server on 3000 → API on 127.0.0.1:4000
+const explicit = process.env.REACT_APP_API_BASE && process.env.REACT_APP_API_BASE.trim();
+const inferredDev =
+  (!explicit &&
+    typeof window !== 'undefined' &&
+    window.location.port === '3000')
+    ? 'http://127.0.0.1:4000'
+    : null;
+
+const baseURL = explicit || inferredDev || '/api';
 
 export const apiClient = axios.create({
   baseURL,
   withCredentials: true,
 });
 
-// Add an interceptor to include the authentication token in all requests
-apiClient.interceptors.request.use(
-  (config) => {
-    const token = localStorage.getItem('authToken'); // Retrieve the token from localStorage
-    if (!token) {
-      console.error('No auth token found in localStorage'); // Debugging log
-    } else {
-      console.log('Auth token retrieved from localStorage:', token); // Debugging log
-      config.headers.Authorization = `Bearer ${token}`; // Add the token to the Authorization header
+function readSession() {
+  try {
+    const raw = localStorage.getItem('hospital-research-session');
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+apiClient.interceptors.request.use((config) => {
+  const token = readSession()?.accessToken || null;
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
+// Optional: single automatic refresh on 401
+let refreshing = null;
+apiClient.interceptors.response.use(
+  (r) => r,
+  async (err) => {
+    const original = err.config || {};
+    if (err.response?.status === 401 && !original._retry) {
+      original._retry = true;
+
+      const session = readSession();
+      const rt = session?.refreshToken;
+      if (!rt) throw err;
+
+      if (!refreshing) {
+        refreshing = apiClient
+          .post('/api/auth/refresh', { refreshToken: rt })
+          .then(({ data }) => {
+            const next = { ...(session || {}), ...data };
+            localStorage.setItem('hospital-research-session', JSON.stringify(next));
+            return data.accessToken;
+          })
+          .finally(() => {
+            refreshing = null;
+          });
+      }
+
+      const newAccess = await refreshing;
+      original.headers = { ...(original.headers || {}), Authorization: `Bearer ${newAccess}` };
+      return apiClient(original);
     }
-    return config;
-  },
-  (error) => Promise.reject(error)
+    throw err;
+  }
 );
