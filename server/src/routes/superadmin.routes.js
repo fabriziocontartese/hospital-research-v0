@@ -1,452 +1,290 @@
 const express = require('express');
 const { z } = require('zod');
-const crypto = require('crypto');
+const mongoose = require('mongoose');
 const argon2 = require('argon2');
+
 const Organization = require('../models/Organization');
 const User = require('../models/User');
-const Patient = require('../models/Patient');
-const Study = require('../models/Study');
-const Form = require('../models/Form');
-const Task = require('../models/Task');
-const FormResponse = require('../models/FormResponse');
+
 const auth = require('../middleware/auth');
 const { requireRole } = require('../middleware/rbac');
 const { validateBody, validateQuery } = require('../utils/validate');
-const { revokeAllRefreshTokens } = require('../utils/jwt');
 
 const router = express.Router();
 
-const orgStatusEnum = ['pending', 'approved', 'rejected', 'suspended'];
+/* ----------------------- Schemas ----------------------- */
 
-const orgListQuerySchema = z.object({
-  status: z.enum(orgStatusEnum).optional(),
-  isActive: z
-    .string()
-    .transform((value) => {
-      if (value === undefined) return undefined;
-      return value === 'true';
-    })
-    .optional(),
-  search: z.string().trim().max(120).optional(),
-});
-
-router.get(
-  '/orgs',
-  auth,
-  requireRole('superadmin'),
-  validateQuery(orgListQuerySchema),
-  async (req, res, next) => {
-    try {
-      const filter = {};
-      if (req.validatedQuery.status) {
-        filter.status = req.validatedQuery.status;
-      }
-      if (typeof req.validatedQuery.isActive === 'boolean') {
-        filter.isActive = req.validatedQuery.isActive;
-      }
-      if (req.validatedQuery.search) {
-        const regex = new RegExp(req.validatedQuery.search, 'i');
-        filter.$or = [{ name: regex }, { contactEmail: regex }];
-      }
-      const orgs = await Organization.find(filter).sort({ createdAt: -1 });
-
-      res.json({
-        organizations: orgs.map((org) => ({
-          id: org._id,
-          name: org.name,
-          country: org.country,
-          contactEmail: org.contactEmail,
-          status: org.status,
-          isActive: org.isActive,
-          createdAt: org.createdAt,
-          updatedAt: org.updatedAt,
-        })),
-      });
-    } catch (error) {
-      next(error);
-    }
-  }
-);
-
-const orgCreateSchema = z.object({
-  name: z.string().min(3).max(120),
-  country: z.string().min(2).max(120),
+const createOrgSchema = z.object({
+  name: z.string().min(1),
+  country: z.string().min(1),
   contactEmail: z.string().email(),
-  message: z.string().max(1000).optional(),
-  status: z.enum(orgStatusEnum).optional(),
-  isActive: z.boolean().optional(),
+  isActive: z.boolean().optional().default(false),
   admin: z
     .object({
       email: z.string().email(),
-      displayName: z.string().min(2).max(120),
+      displayName: z.string().min(1),
+      password: z.string().min(8),
     })
     .optional(),
 });
 
-router.post(
+const listOrgsQuery = z.object({
+  isActive: z
+    .preprocess((v) => (v === 'true' ? true : v === 'false' ? false : v), z.boolean().optional())
+    .optional(),
+  search: z.string().trim().max(200).optional(),
+});
+
+const updateOrgSchema = z.object({
+  name: z.string().min(1),
+  country: z.string().min(1),
+  contactEmail: z.string().email(),
+  isActive: z.boolean(),
+});
+
+const orgIdParam = z.object({
+  id: z.string().refine((v) => mongoose.Types.ObjectId.isValid(v), { message: 'Invalid org id' }),
+});
+
+const adminsQuery = z.object({
+  orgId: z.string().refine((v) => mongoose.Types.ObjectId.isValid(v), { message: 'Invalid org id' }),
+});
+
+const createAdminSchema = z.object({
+  email: z.string().email(),
+  displayName: z.string().min(1),
+  password: z.string().min(8),
+});
+
+/* ----------------------- Helpers ----------------------- */
+
+const mapOrg = (o) => ({
+  id: o._id.toString(),
+  name: o.name,
+  country: o.country,
+  contactEmail: o.contactEmail,
+  isActive: !!o.isActive,
+  updatedAt: o.updatedAt,
+});
+
+const mapAdmin = (u) => ({
+  id: u._id.toString(),
+  email: u.email,
+  displayName: u.displayName,
+  isActive: !!u.isActive,
+  createdAt: u.createdAt,
+});
+
+/* ----------------------- Routes ----------------------- */
+
+router.use(auth, requireRole('superadmin'));
+
+/**
+ * GET /api/superadmin/orgs
+ * Filters: search, isActive
+ */
+router.get(
   '/orgs',
-  auth,
-  requireRole('superadmin'),
-  validateBody(orgCreateSchema),
+  validateQuery(listOrgsQuery),
   async (req, res, next) => {
     try {
-      const payload = req.validatedBody;
-      let tempPassword;
-      let adminUser;
+      const { isActive, search } = req.validatedQuery || {};
+      const query = {};
 
-      if (payload.admin) {
-        const existing = await User.findOne({ email: payload.admin.email.toLowerCase() });
-        if (existing) {
-          const error = new Error('Admin email already in use');
-          error.status = 409;
-          throw error;
-        }
+      if (typeof isActive === 'boolean') {
+        query.isActive = isActive;
+      }
+      if (search && search.trim()) {
+        const s = search.trim();
+        query.$or = [
+          { name: { $regex: s, $options: 'i' } },
+          { contactEmail: { $regex: s, $options: 'i' } },
+          { country: { $regex: s, $options: 'i' } },
+        ];
       }
 
-      const organization = await Organization.create({
-        name: payload.name,
-        country: payload.country,
-        contactEmail: payload.contactEmail,
-        message: payload.message,
-        status: payload.status || 'pending',
-        isActive: payload.isActive ?? true,
+      const organizations = await Organization.find(query).sort({ updatedAt: -1 }).lean();
+      res.json({ organizations: organizations.map(mapOrg) });
+    } catch (e) {
+      next(e);
+    }
+  }
+);
+
+/**
+ * POST /api/superadmin/orgs
+ * Create organization, and optionally create initial admin with hashed password.
+ * New orgs default to inactive.
+ */
+router.post(
+  '/orgs',
+  validateBody(createOrgSchema),
+  async (req, res, next) => {
+    try {
+      const { name, country, contactEmail, isActive = false, admin } = req.validatedBody;
+
+      const org = await Organization.create({
+        name,
+        country,
+        contactEmail,
+        isActive: Boolean(isActive) && false, // force default false for new orgs
       });
 
-      if (payload.admin) {
-        tempPassword = crypto.randomBytes(10).toString('base64url');
-        const passwordHash = await argon2.hash(tempPassword);
-        adminUser = await User.create({
-          email: payload.admin.email.toLowerCase(),
-          displayName: payload.admin.displayName,
-          role: 'admin',
-          orgId: organization._id,
+      if (admin) {
+        const { email, displayName, password } = admin;
+        const passwordHash = await argon2.hash(password);
+        await User.create({
+          email: email.toLowerCase(),
+          displayName,
           passwordHash,
-          isActive: organization.isActive,
+          role: 'admin',
+          orgId: org._id,
+          isActive: true,
         });
       }
 
-      res.status(201).json({
-        organization: {
-          id: organization._id,
-          name: organization.name,
-          country: organization.country,
-          contactEmail: organization.contactEmail,
-          status: organization.status,
-          isActive: organization.isActive,
-          message: organization.message,
-        },
-        admin:
-          adminUser &&
-          {
-            id: adminUser._id,
-            email: adminUser.email,
-            displayName: adminUser.displayName,
-            isActive: adminUser.isActive,
-            tempPassword: process.env.NODE_ENV === 'production' ? undefined : tempPassword,
-          },
-      });
-    } catch (error) {
-      next(error);
+      res.json({ organization: mapOrg(org) });
+    } catch (e) {
+      next(e);
     }
   }
 );
 
-const orgUpdateSchema = z.object({
-  name: z.string().min(3).max(120).optional(),
-  country: z.string().min(2).max(120).optional(),
-  contactEmail: z.string().email().optional(),
-  message: z.string().max(1000).optional(),
-  status: z.enum(orgStatusEnum).optional(),
-  isActive: z.boolean().optional(),
-});
-
+/**
+ * PATCH /api/superadmin/orgs/:id
+ * Update org basic fields and activation.
+ */
 router.patch(
   '/orgs/:id',
-  auth,
-  requireRole('superadmin'),
-  validateBody(orgUpdateSchema),
   async (req, res, next) => {
     try {
-      const { id } = req.params;
-      const updates = { ...req.validatedBody };
-
-      if (Object.prototype.hasOwnProperty.call(updates, 'isActive') && updates.isActive === false) {
-        updates.status = updates.status || 'suspended';
+      const parsedId = orgIdParam.safeParse({ id: req.params.id });
+      if (!parsedId.success) {
+        const err = new Error(parsedId.error.issues?.[0]?.message || 'Invalid org id');
+        err.status = 400;
+        throw err;
+      }
+      const parsedBody = updateOrgSchema.safeParse(req.body);
+      if (!parsedBody.success) {
+        const err = new Error(parsedBody.error.issues?.[0]?.message || 'Invalid body');
+        err.status = 400;
+        throw err;
       }
 
-      const organization = await Organization.findByIdAndUpdate(id, updates, {
-        new: true,
-      });
+      const { name, country, contactEmail, isActive } = parsedBody.data;
 
-      if (!organization) {
-        const error = new Error('Organization not found');
-        error.status = 404;
-        throw error;
+      const org = await Organization.findByIdAndUpdate(
+        req.params.id,
+        { name, country, contactEmail, isActive: !!isActive },
+        { new: true, runValidators: true }
+      );
+
+      if (!org) {
+        const err = new Error('Organization not found');
+        err.status = 404;
+        throw err;
       }
 
-      if (Object.prototype.hasOwnProperty.call(req.validatedBody, 'isActive')) {
-        const nextActive = req.validatedBody.isActive;
-        if (nextActive === false) {
-          await User.updateMany(
-            { orgId: organization._id },
-            { $set: { isActive: false, refreshTokens: [] } }
-          );
-        } else if (nextActive === true) {
-          await User.updateMany({ orgId: organization._id }, { $set: { isActive: true } });
-        }
-      }
-
-      res.json({
-        organization: {
-          id: organization._id,
-          name: organization.name,
-          country: organization.country,
-          contactEmail: organization.contactEmail,
-          status: organization.status,
-          isActive: organization.isActive,
-          message: organization.message,
-        },
-      });
-    } catch (error) {
-      next(error);
+      res.json({ organization: mapOrg(org) });
+    } catch (e) {
+      next(e);
     }
   }
 );
 
+/**
+ * DELETE /api/superadmin/orgs/:id
+ * Deletes org and users in that org. Extend to cascade other collections as needed.
+ */
 router.delete(
   '/orgs/:id',
-  auth,
-  requireRole('superadmin'),
   async (req, res, next) => {
     try {
-      const { id } = req.params;
-      const organization = await Organization.findById(id);
-      if (!organization) {
-        const error = new Error('Organization not found');
-        error.status = 404;
-        throw error;
+      const parsedId = orgIdParam.safeParse({ id: req.params.id });
+      if (!parsedId.success) {
+        const err = new Error(parsedId.error.issues?.[0]?.message || 'Invalid org id');
+        err.status = 400;
+        throw err;
       }
 
-      await Promise.all([
-        FormResponse.deleteMany({ orgId: organization._id }),
-        Task.deleteMany({ orgId: organization._id }),
-        Form.deleteMany({ orgId: organization._id }),
-        Study.deleteMany({ orgId: organization._id }),
-        Patient.deleteMany({ orgId: organization._id }),
-        User.deleteMany({ orgId: organization._id }),
-        Organization.deleteOne({ _id: organization._id }),
-      ]);
+      const org = await Organization.findById(req.params.id);
+      if (!org) {
+        const err = new Error('Organization not found');
+        err.status = 404;
+        throw err;
+      }
 
-      res.json({
-        ok: true,
-      });
-    } catch (error) {
-      next(error);
+      await User.deleteMany({ orgId: org._id });
+      await Organization.findByIdAndDelete(org._id);
+
+      res.json({ ok: true });
+    } catch (e) {
+      next(e);
     }
   }
 );
 
-const adminsQuerySchema = z.object({
-  orgId: z.string().regex(/^[a-f\d]{24}$/i, 'Invalid orgId').optional(),
-  isActive: z
-    .string()
-    .transform((value) => {
-      if (value === undefined) return undefined;
-      return value === 'true';
-    })
-    .optional(),
-});
-
+/**
+ * GET /api/superadmin/admins?orgId=...
+ */
 router.get(
   '/admins',
-  auth,
-  requireRole('superadmin'),
-  validateQuery(adminsQuerySchema),
+  validateQuery(adminsQuery),
   async (req, res, next) => {
     try {
-      const filter = { role: 'admin' };
-      if (req.validatedQuery.orgId) {
-        filter.orgId = req.validatedQuery.orgId;
-      }
-      if (typeof req.validatedQuery.isActive === 'boolean') {
-        filter.isActive = req.validatedQuery.isActive;
-      }
-
-      const admins = await User.find(filter)
-        .sort({ createdAt: -1 })
-        .select('-passwordHash -refreshTokens')
-        .populate('orgId', 'name status isActive');
-
-      res.json({
-        admins: admins.map((admin) => ({
-          id: admin._id,
-          email: admin.email,
-          displayName: admin.displayName,
-          isActive: admin.isActive,
-          role: admin.role,
-          org: admin.orgId
-            ? {
-                id: admin.orgId._id,
-                name: admin.orgId.name,
-                status: admin.orgId.status,
-                isActive: admin.orgId.isActive,
-              }
-            : null,
-          createdAt: admin.createdAt,
-        })),
-      });
-    } catch (error) {
-      next(error);
+      const { orgId } = req.validatedQuery;
+      const admins = await User.find({ orgId, role: 'admin' }).sort({ createdAt: -1 }).lean();
+      res.json({ admins: admins.map(mapAdmin) });
+    } catch (e) {
+      next(e);
     }
   }
 );
 
-const adminCreateSchema = z.object({
-  email: z.string().email(),
-  displayName: z.string().min(2).max(120),
-  activateOrg: z.boolean().optional(),
-});
-
+/**
+ * POST /api/superadmin/orgs/:orgId/admins
+ * Create admin with argon2 passwordHash.
+ */
 router.post(
-  '/orgs/:id/admins',
-  auth,
-  requireRole('superadmin'),
-  validateBody(adminCreateSchema),
+  '/orgs/:orgId/admins',
   async (req, res, next) => {
     try {
-      const { id } = req.params;
-      const org = await Organization.findById(id);
+      const orgId = req.params.orgId;
+      if (!mongoose.Types.ObjectId.isValid(orgId)) {
+        const err = new Error('Invalid org id');
+        err.status = 400;
+        throw err;
+      }
+
+      const parsed = createAdminSchema.safeParse(req.body);
+      if (!parsed.success) {
+        const err = new Error(parsed.error.issues?.[0]?.message || 'Invalid body');
+        err.status = 400;
+        throw err;
+      }
+
+      const org = await Organization.findById(orgId);
       if (!org) {
-        const error = new Error('Organization not found');
-        error.status = 404;
-        throw error;
+        const err = new Error('Organization not found');
+        err.status = 404;
+        throw err;
       }
 
-      if (!org.isActive && !req.validatedBody.activateOrg) {
-        const error = new Error('Organization is inactive. Set "activateOrg" to true to proceed.');
-        error.status = 400;
-        throw error;
-      }
+      const { email, displayName, password } = parsed.data;
+      const passwordHash = await argon2.hash(password);
 
-      if (req.validatedBody.activateOrg) {
-        org.isActive = true;
-        if (org.status === 'suspended') {
-          org.status = 'approved';
-        }
-        await org.save();
-      }
-
-      const existingEmail = await User.findOne({ email: req.validatedBody.email.toLowerCase() });
-      if (existingEmail) {
-        const error = new Error('Email already in use');
-        error.status = 409;
-        throw error;
-      }
-
-      const tempPassword = crypto.randomBytes(10).toString('base64url');
-      const passwordHash = await argon2.hash(tempPassword);
-
-      const adminUser = await User.create({
-        email: req.validatedBody.email.toLowerCase(),
-        displayName: req.validatedBody.displayName,
+      const admin = await User.create({
+        email: email.toLowerCase(),
+        displayName,
+        passwordHash,
         role: 'admin',
         orgId: org._id,
-        passwordHash,
-        isActive: org.isActive,
+        isActive: true,
       });
 
-      res.status(201).json({
-        admin: {
-          id: adminUser._id,
-          email: adminUser.email,
-          displayName: adminUser.displayName,
-          isActive: adminUser.isActive,
-          orgId: org._id,
-          tempPassword: process.env.NODE_ENV === 'production' ? undefined : tempPassword,
-        },
-        organization: {
-          id: org._id,
-          name: org.name,
-          status: org.status,
-          isActive: org.isActive,
-        },
-      });
-    } catch (error) {
-      next(error);
-    }
-  }
-);
-
-const adminUpdateSchema = z.object({
-  email: z.string().email().optional(),
-  displayName: z.string().min(2).max(120).optional(),
-  isActive: z.boolean().optional(),
-  resetPassword: z.boolean().optional(),
-});
-
-router.patch(
-  '/admins/:id',
-  auth,
-  requireRole('superadmin'),
-  validateBody(adminUpdateSchema),
-  async (req, res, next) => {
-    try {
-      const { id } = req.params;
-      const adminUser = await User.findOne({ _id: id, role: 'admin' });
-      if (!adminUser) {
-        const error = new Error('Admin account not found');
-        error.status = 404;
-        throw error;
-      }
-
-      if (req.validatedBody.email) {
-        const nextEmail = req.validatedBody.email.toLowerCase();
-        if (nextEmail !== adminUser.email) {
-          const existing = await User.findOne({ email: nextEmail, _id: { $ne: adminUser._id } });
-          if (existing) {
-            const error = new Error('Email already in use');
-            error.status = 409;
-            throw error;
-          }
-          adminUser.email = nextEmail;
-        }
-      }
-
-      if (req.validatedBody.displayName) {
-        adminUser.displayName = req.validatedBody.displayName;
-      }
-
-      let tempPassword;
-      if (req.validatedBody.resetPassword) {
-        tempPassword = crypto.randomBytes(10).toString('base64url');
-        adminUser.passwordHash = await argon2.hash(tempPassword);
-        await revokeAllRefreshTokens(adminUser);
-      }
-
-      if (Object.prototype.hasOwnProperty.call(req.validatedBody, 'isActive')) {
-        adminUser.isActive = req.validatedBody.isActive;
-        if (!adminUser.isActive) {
-          await revokeAllRefreshTokens(adminUser);
-        }
-      }
-
-      await adminUser.save();
-
-      res.json({
-        admin: {
-          id: adminUser._id,
-          email: adminUser.email,
-          displayName: adminUser.displayName,
-          isActive: adminUser.isActive,
-          orgId: adminUser.orgId,
-          tempPassword:
-            req.validatedBody.resetPassword && process.env.NODE_ENV !== 'production'
-              ? tempPassword
-              : undefined,
-        },
-      });
-    } catch (error) {
-      next(error);
+      res.json({ admin: mapAdmin(admin) });
+    } catch (e) {
+      next(e);
     }
   }
 );

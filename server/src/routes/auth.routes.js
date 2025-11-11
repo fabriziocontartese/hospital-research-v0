@@ -1,16 +1,18 @@
 const express = require('express');
-const argon2 = require('argon2');
-const mongoose = require('mongoose');
-const jwt = require('jsonwebtoken');
 const { z } = require('zod');
+const mongoose = require('mongoose');
+const argon2 = require('argon2');
+const jwt = require('jsonwebtoken');
+
 const User = require('../models/User');
 const Organization = require('../models/Organization');
+
 const {
   signAccessToken,
   createRefreshToken,
   verifyRefreshToken,
-  revokeRefreshToken,
 } = require('../utils/jwt');
+
 const { validateBody } = require('../utils/validate');
 
 const router = express.Router();
@@ -20,10 +22,13 @@ const loginSchema = z.object({
   password: z.string().min(8),
 });
 
+/**
+ * Gate: allow superadmin always.
+ * For non-superadmin, require a valid org that isActive === true.
+ * We do NOT require org.status === 'approved' to avoid blocking fresh orgs.
+ */
 const ensureActiveOrganization = async (user) => {
-  if (user.role === 'superadmin') {
-    return;
-  }
+  if (user.role === 'superadmin') return;
 
   if (!user.orgId) {
     const error = new Error('Organization is not active');
@@ -43,7 +48,7 @@ const ensureActiveOrganization = async (user) => {
     throw lookupError;
   }
 
-  if (!organization || !organization.isActive || organization.status !== 'approved') {
+  if (!organization || !organization.isActive) {
     const error = new Error('Organization is not active');
     error.status = 403;
     throw error;
@@ -83,10 +88,13 @@ router.post(
           'user-agent': req.headers['user-agent'],
         },
       });
+
       const { email, password } = req.validatedBody;
       // eslint-disable-next-line no-console
       console.info('[auth:login] validatedBody', { email, bodyKeys: Object.keys(req.body || {}) });
+
       const user = await User.findOne({ email: email.toLowerCase() });
+
       if (!user || !user.isActive) {
         const error = new Error('Invalid credentials');
         error.status = 401;
@@ -107,7 +115,7 @@ router.post(
       let passwordValid = false;
       try {
         passwordValid = await argon2.verify(user.passwordHash, password);
-      } catch (verifyError) {
+      } catch (_verifyError) {
         const error = new Error('Invalid credentials');
         error.status = 401;
         throw error;
@@ -171,6 +179,7 @@ router.post(
           'user-agent': req.headers['user-agent'],
         },
       });
+
       const { refreshToken } = req.validatedBody;
       const decoded = jwt.decode(refreshToken);
       if (!decoded?.sub) {
@@ -189,18 +198,26 @@ router.post(
         error.status = 401;
         throw error;
       }
-      await ensureActiveOrganization(user);
-      const verified = await verifyRefreshToken(refreshToken, user);
-      await revokeRefreshToken(user, verified.tid);
 
+      await ensureActiveOrganization(user);
+
+      const verified = await verifyRefreshToken(refreshToken, user);
+
+      // rotate
       const accessToken = signAccessToken(user);
       const newRefreshToken = await createRefreshToken(user);
+
+      // revoke the one we just used
+      const { revokeRefreshToken } = require('../utils/jwt');
+      await revokeRefreshToken(user, verified.tid);
+
       // eslint-disable-next-line no-console
       console.info('[auth:refresh] success', {
         userId: user._id,
         role: user.role,
         orgId: user.orgId,
       });
+
       res.json({ accessToken, refreshToken: newRefreshToken });
     } catch (error) {
       const normalized = normalizeDbError(error);
@@ -230,6 +247,7 @@ router.post(
           'user-agent': req.headers['user-agent'],
         },
       });
+
       const { refreshToken } = req.validatedBody;
       const decoded = jwt.decode(refreshToken);
       if (!decoded?.sub) {
@@ -239,12 +257,11 @@ router.post(
       if (!user) {
         return res.status(200).json({ ok: true });
       }
+      const { verifyRefreshToken, revokeRefreshToken } = require('../utils/jwt');
       const verified = await verifyRefreshToken(refreshToken, user);
       await revokeRefreshToken(user, verified.tid);
       // eslint-disable-next-line no-console
-      console.info('[auth:logout] success', {
-        userId: user._id,
-      });
+      console.info('[auth:logout] success', { userId: user._id });
       return res.json({ ok: true });
     } catch (error) {
       const normalized = normalizeDbError(error);

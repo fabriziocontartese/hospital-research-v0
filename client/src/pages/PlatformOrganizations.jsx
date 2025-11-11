@@ -6,22 +6,7 @@ import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import styles from '../styles/PlatformOrganizations.module.css';
 
-/* ---------- constants ---------- */
-
-const STATUS = [
-  { value: 'pending', label: 'Pending' },
-  { value: 'approved', label: 'Approved' },
-  { value: 'rejected', label: 'Rejected' },
-  { value: 'suspended', label: 'Suspended' },
-];
-
-const STATUS_CLASS = (s, css) =>
-  ({
-    approved: css.statusApproved,
-    pending: css.statusPending,
-    rejected: css.statusRejected,
-    suspended: css.statusSuspended,
-  }[s] || '');
+/* ---------- helpers ---------- */
 
 const toEditState = (org) =>
   org
@@ -29,8 +14,6 @@ const toEditState = (org) =>
         name: org.name || '',
         country: org.country || '',
         contactEmail: org.contactEmail || '',
-        message: org.message || '',
-        status: org.status || 'pending',
         isActive: Boolean(org.isActive),
       }
     : null;
@@ -39,20 +22,20 @@ const initialCreate = {
   name: '',
   country: '',
   contactEmail: '',
-  status: 'pending',
-  message: '',
   createAdmin: true,
   adminEmail: '',
   adminDisplayName: '',
+  adminPassword: '',
+  adminPasswordConfirm: '',
 };
 
 const initialAdmin = {
   email: '',
   displayName: '',
-  activateOrg: false,
+  password: '',
+  passwordConfirm: '',
+  // activateOrg removed per spec
 };
-
-/* ---------- small utils ---------- */
 
 function useDebounced(value, ms = 300) {
   const [v, setV] = useState(value);
@@ -85,13 +68,41 @@ function Modal({ open, onClose, children, labelledBy }) {
   );
 }
 
+/* ---------- light tab ui (local, no external css dependency) ---------- */
+
+const TABS = ['Details', 'Admins', 'Create admin', 'Danger'];
+
+function TabBar({ active, onChange }) {
+  return (
+    <div style={{ display: 'flex', gap: 8, borderBottom: '1px solid var(--border, #e5e7eb)', marginBottom: 16 }}>
+      {TABS.map((t) => (
+        <button
+          key={t}
+          type="button"
+          onClick={() => onChange(t)}
+          aria-pressed={active === t}
+          style={{
+            padding: '6px 10px',
+            border: 'none',
+            background: 'transparent',
+            borderBottom: active === t ? '2px solid var(--accent, #2b5bf6)' : '2px solid transparent',
+            fontWeight: active === t ? 600 : 500,
+            cursor: 'pointer',
+          }}
+        >
+          {t}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /* ---------- page ---------- */
 
 const PlatformOrganizations = () => {
   const qc = useQueryClient();
 
   // filters
-  const [statusFilter, setStatusFilter] = useState('all');
   const [activeFilter, setActiveFilter] = useState('all');
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebounced(search, 250);
@@ -100,6 +111,7 @@ const PlatformOrganizations = () => {
   const [banner, setBanner] = useState(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showManage, setShowManage] = useState(false);
+  const [manageTab, setManageTab] = useState('Details');
 
   // forms
   const [createState, setCreateState] = useState(initialCreate);
@@ -119,11 +131,10 @@ const PlatformOrganizations = () => {
 
   const filters = useMemo(() => {
     const params = {};
-    if (statusFilter !== 'all') params.status = statusFilter;
     if (activeFilter !== 'all') params.isActive = activeFilter === 'active';
     if (debouncedSearch.trim()) params.search = debouncedSearch.trim();
     return params;
-  }, [statusFilter, activeFilter, debouncedSearch]);
+  }, [activeFilter, debouncedSearch]);
 
   /* ---------- queries ---------- */
 
@@ -146,14 +157,12 @@ const PlatformOrganizations = () => {
     enabled: showManage && Boolean(manageOrgId),
   });
 
-// ✅ Memoize raw organizations so it does NOT trigger downstream useMemo recalculations
-const organizations = useMemo(() => orgsQuery.data ?? [], [orgsQuery.data]);
+  const organizations = useMemo(() => orgsQuery.data ?? [], [orgsQuery.data]);
 
-// ✅ Safe: this depends only on memoized organizations + manageOrgId
-const manageOrg = useMemo(
-  () => organizations.find((x) => x.id === manageOrgId) || null,
-  [organizations, manageOrgId]
-);
+  const manageOrg = useMemo(
+    () => organizations.find((x) => x.id === manageOrgId) || null,
+    [organizations, manageOrgId]
+  );
 
   useEffect(() => {
     if (!showManage || !manageOrgId) return;
@@ -165,9 +174,7 @@ const manageOrg = useMemo(
   const createMutation = useMutation({
     mutationFn: (payload) => apiClient.post('/api/superadmin/orgs', payload).then((r) => r.data),
     onSuccess: (data) => {
-      const msg = data.admin?.tempPassword
-        ? `Organization created. Temporary admin password: ${data.admin.tempPassword}`
-        : 'Organization created.';
+      const msg = 'Organization created.';
       setBanner({ type: 'success', message: msg });
       setCreateState(initialCreate);
       setShowCreate(false);
@@ -176,6 +183,7 @@ const manageOrg = useMemo(
       setEditState(toEditState(data.organization));
       setManageFeedback(msg);
       setShowManage(true);
+      setManageTab('Details');
 
       qc.invalidateQueries({ queryKey: ['superadmin', 'orgs'] });
     },
@@ -203,10 +211,8 @@ const manageOrg = useMemo(
   const adminCreateMutation = useMutation({
     mutationFn: ({ orgId, payload }) =>
       apiClient.post(`/api/superadmin/orgs/${orgId}/admins`, payload).then((r) => r.data),
-    onSuccess: (data) => {
-      setAdminFeedback(
-        data.admin?.tempPassword ? `Admin created. Temporary password: ${data.admin.tempPassword}` : 'Admin created.'
-      );
+    onSuccess: () => {
+      setAdminFeedback('Admin created.');
       setAdminError('');
       setAdminDraft(initialAdmin);
       qc.invalidateQueries({ queryKey: ['superadmin', 'admins'] });
@@ -245,6 +251,7 @@ const manageOrg = useMemo(
     setDeleteConfirm(false);
     setDeleteError('');
     setEditState(null);
+    setManageTab('Details');
   }
 
   function openCreate() {
@@ -265,22 +272,36 @@ const manageOrg = useMemo(
     resetManage();
   }
 
+  function validatePasswordPair(pw, pw2) {
+    if (!pw || pw.length < 8) return 'Password must be at least 8 characters.';
+    if (pw !== pw2) return 'Passwords do not match.';
+    return '';
+  }
+
   function handleCreateSubmit(e) {
     e.preventDefault();
+
     const payload = {
       name: createState.name.trim(),
       country: createState.country.trim(),
       contactEmail: createState.contactEmail.trim(),
-      status: createState.status,
-      message: createState.message.trim() || undefined,
-      isActive: createState.status === 'approved',
+      // new orgs default to inactive; superadmin can activate later
+      isActive: false,
     };
+
     if (createState.createAdmin) {
+      const pwErr = validatePasswordPair(createState.adminPassword, createState.adminPasswordConfirm);
+      if (pwErr) {
+        setBanner({ type: 'error', message: pwErr });
+        return;
+      }
       payload.admin = {
         email: createState.adminEmail.trim(),
         displayName: createState.adminDisplayName.trim(),
+        password: createState.adminPassword,
       };
     }
+
     createMutation.mutate(payload);
   }
 
@@ -291,8 +312,6 @@ const manageOrg = useMemo(
       name: editState.name.trim(),
       country: editState.country.trim(),
       contactEmail: editState.contactEmail.trim(),
-      status: editState.status,
-      message: editState.message.trim() || undefined,
       isActive: Boolean(editState.isActive),
     };
     updateMutation.mutate({ id: manageOrgId, payload });
@@ -301,19 +320,23 @@ const manageOrg = useMemo(
   function handleCreateAdmin(e) {
     e.preventDefault();
     if (!manageOrgId) return;
+
+    const pwErr = validatePasswordPair(adminDraft.password, adminDraft.passwordConfirm);
+    if (pwErr) {
+      setAdminFeedback('');
+      setAdminError(pwErr);
+      return;
+    }
+
     adminCreateMutation.mutate({
       orgId: manageOrgId,
       payload: {
         email: adminDraft.email.trim(),
         displayName: adminDraft.displayName.trim(),
-        activateOrg: adminDraft.activateOrg || undefined,
+        password: adminDraft.password,
+        // activateOrg removed per spec
       },
     });
-  }
-
-  function quickUpdate(next) {
-    if (!manageOrgId) return;
-    updateMutation.mutate({ id: manageOrgId, payload: next });
   }
 
   /* ---------- render ---------- */
@@ -347,14 +370,6 @@ const manageOrg = useMemo(
         <CardContent>
           <div className={styles.filters}>
             <Input placeholder="Search by name or email" value={search} onChange={(e) => setSearch(e.target.value)} />
-            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-              <option value="all">All statuses</option>
-              {STATUS.map((s) => (
-                <option key={s.value} value={s.value}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
             <select value={activeFilter} onChange={(e) => setActiveFilter(e.target.value)}>
               <option value="all">All states</option>
               <option value="active">Active</option>
@@ -374,7 +389,6 @@ const manageOrg = useMemo(
                 <tr>
                   <th>Name</th>
                   <th>Contact</th>
-                  <th>Status</th>
                   <th>Active</th>
                   <th>Updated</th>
                   <th />
@@ -388,11 +402,6 @@ const manageOrg = useMemo(
                       <div className={styles.muted}>{org.country}</div>
                     </td>
                     <td>{org.contactEmail}</td>
-                    <td>
-                      <span className={`${styles.badge} ${STATUS_CLASS(org.status, styles)}`}>
-                        {STATUS.find((x) => x.value === org.status)?.label || org.status}
-                      </span>
-                    </td>
                     <td>{org.isActive ? 'Active' : 'Inactive'}</td>
                     <td>{fmtDate(org.updatedAt)}</td>
                     <td>
@@ -454,33 +463,6 @@ const manageOrg = useMemo(
                 />
               </div>
 
-              <div className={styles.formGroup}>
-                <label htmlFor="org-status">Initial status</label>
-                <select
-                  id="org-status"
-                  value={createState.status}
-                  onChange={(e) => setCreateState((p) => ({ ...p, status: e.target.value }))}
-                >
-                  {STATUS.map((s) => (
-                    <option key={s.value} value={s.value}>
-                      {s.label}
-                    </option>
-                  ))}
-                </select>
-                <span className={styles.muted}>Approving will immediately activate all admin accounts created.</span>
-              </div>
-
-              <div className={styles.formGroup}>
-                <label htmlFor="org-notes">Notes (internal)</label>
-                <textarea
-                  id="org-notes"
-                  className={styles.textarea}
-                  value={createState.message}
-                  onChange={(e) => setCreateState((p) => ({ ...p, message: e.target.value }))}
-                  placeholder="Optional notes."
-                />
-              </div>
-
               <div className={styles.checkboxRow}>
                 <input
                   type="checkbox"
@@ -512,6 +494,29 @@ const manageOrg = useMemo(
                       onChange={(e) => setCreateState((p) => ({ ...p, adminDisplayName: e.target.value }))}
                     />
                   </div>
+                  <div className={styles.formRow}>
+                    <div className={styles.formGroup}>
+                      <label htmlFor="create-admin-password">Admin password</label>
+                      <Input
+                        id="create-admin-password"
+                        required
+                        type="password"
+                        value={createState.adminPassword}
+                        onChange={(e) => setCreateState((p) => ({ ...p, adminPassword: e.target.value }))}
+                        placeholder="Min 8 characters"
+                      />
+                    </div>
+                    <div className={styles.formGroup}>
+                      <label htmlFor="create-admin-password-confirm">Confirm password</label>
+                      <Input
+                        id="create-admin-password-confirm"
+                        required
+                        type="password"
+                        value={createState.adminPasswordConfirm}
+                        onChange={(e) => setCreateState((p) => ({ ...p, adminPasswordConfirm: e.target.value }))}
+                      />
+                    </div>
+                  </div>
                 </>
               ) : null}
 
@@ -538,210 +543,191 @@ const manageOrg = useMemo(
           </CardHeader>
 
           <CardContent className={styles.modalContent}>
-            {/* details */}
-            <section className={styles.modalSection}>
-              <h4>Organization details</h4>
-              <form className={styles.modalForm} onSubmit={handleEditSubmit}>
-                <div className={styles.formGroup}>
-                  <label htmlFor="edit-name">Organization name</label>
-                  <Input
-                    id="edit-name"
-                    required
-                    value={editState?.name || ''}
-                    onChange={(e) => setEditState((p) => ({ ...p, name: e.target.value }))}
-                  />
-                </div>
-                <div className={styles.formGroup}>
-                  <label htmlFor="edit-country">Country</label>
-                  <Input
-                    id="edit-country"
-                    required
-                    value={editState?.country || ''}
-                    onChange={(e) => setEditState((p) => ({ ...p, country: e.target.value }))}
-                  />
-                </div>
-                <div className={styles.formGroup}>
-                  <label htmlFor="edit-contact">Primary contact email</label>
-                  <Input
-                    id="edit-contact"
-                    required
-                    type="email"
-                    value={editState?.contactEmail || ''}
-                    onChange={(e) => setEditState((p) => ({ ...p, contactEmail: e.target.value }))}
-                  />
-                </div>
-                <div className={styles.formGroup}>
-                  <label htmlFor="edit-status">Status</label>
-                  <select
-                    id="edit-status"
-                    value={editState?.status || 'pending'}
-                    onChange={(e) => setEditState((p) => ({ ...p, status: e.target.value }))}
-                  >
-                    {STATUS.map((s) => (
-                      <option key={s.value} value={s.value}>
-                        {s.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className={styles.checkboxRow}>
-                  <input
-                    type="checkbox"
-                    id="edit-active"
-                    checked={Boolean(editState?.isActive)}
-                    onChange={(e) => setEditState((p) => ({ ...p, isActive: e.target.checked }))}
-                  />
-                  <label htmlFor="edit-active">Organization is active</label>
-                </div>
-                <div className={styles.formGroup}>
-                  <label htmlFor="edit-notes">Internal notes</label>
-                  <textarea
-                    id="edit-notes"
-                    className={styles.textarea}
-                    value={editState?.message || ''}
-                    onChange={(e) => setEditState((p) => ({ ...p, message: e.target.value }))}
-                  />
+            <TabBar active={manageTab} onChange={setManageTab} />
+
+            {/* TAB: Details */}
+            {manageTab === 'Details' && (
+              <section className={styles.modalSection}>
+                <h4>Organization details</h4>
+                <form className={styles.modalForm} onSubmit={handleEditSubmit}>
+                  <div className={styles.formGroup}>
+                    <label htmlFor="edit-name">Organization name</label>
+                    <Input
+                      id="edit-name"
+                      required
+                      value={editState?.name || ''}
+                      onChange={(e) => setEditState((p) => ({ ...p, name: e.target.value }))}
+                    />
+                  </div>
+                  <div className={styles.formGroup}>
+                    <label htmlFor="edit-country">Country</label>
+                    <Input
+                      id="edit-country"
+                      required
+                      value={editState?.country || ''}
+                      onChange={(e) => setEditState((p) => ({ ...p, country: e.target.value }))}
+                    />
+                  </div>
+                  <div className={styles.formGroup}>
+                    <label htmlFor="edit-contact">Primary contact email</label>
+                    <Input
+                      id="edit-contact"
+                      required
+                      type="email"
+                      value={editState?.contactEmail || ''}
+                      onChange={(e) => setEditState((p) => ({ ...p, contactEmail: e.target.value }))}
+                    />
+                  </div>
+                  <div className={styles.checkboxRow}>
+                    <input
+                      type="checkbox"
+                      id="edit-active"
+                      checked={Boolean(editState?.isActive)}
+                      onChange={(e) => setEditState((p) => ({ ...p, isActive: e.target.checked }))}
+                    />
+                    <label htmlFor="edit-active">Organization is active</label>
+                  </div>
+
+                  {manageFeedback ? <div className={styles.feedback}>{manageFeedback}</div> : null}
+                  {manageError ? <div className={styles.error}>{manageError}</div> : null}
+
+                  <div className={styles.modalActions}>
+                    <Button type="submit" disabled={updateMutation.isPending}>
+                      {updateMutation.isPending ? 'Saving…' : 'Save changes'}
+                    </Button>
+                    {/* Activate/Deactivate buttons removed per spec */}
+                  </div>
+                </form>
+              </section>
+            )}
+
+            {/* TAB: Admins */}
+            {manageTab === 'Admins' && (
+              <section className={styles.modalSection}>
+                <div className={styles.modalSectionHeader}>
+                  <h4>Admin accounts</h4>
+                  <span className={styles.muted}>
+                    {adminsQuery.isFetching ? 'Refreshing…' : `${(adminsQuery.data || []).length} total`}
+                  </span>
                 </div>
 
-                {manageFeedback ? <div className={styles.feedback}>{manageFeedback}</div> : null}
-                {manageError ? <div className={styles.error}>{manageError}</div> : null}
-
-                <div className={styles.modalActions}>
-                  <Button type="submit" disabled={updateMutation.isPending}>
-                    {updateMutation.isPending ? 'Saving…' : 'Save changes'}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={updateMutation.isPending}
-                    onClick={() => quickUpdate({ status: 'approved', isActive: true })}
-                  >
-                    Approve
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={updateMutation.isPending}
-                    onClick={() => quickUpdate({ status: 'suspended', isActive: false })}
-                  >
-                    Suspend
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    disabled={updateMutation.isPending}
-                    onClick={() => quickUpdate({ status: 'rejected', isActive: false })}
-                  >
-                    Reject
-                  </Button>
-                </div>
-              </form>
-            </section>
-
-            {/* admins */}
-            <section className={styles.modalSection}>
-              <div className={styles.modalSectionHeader}>
-                <h4>Admin accounts</h4>
-                <span className={styles.muted}>
-                  {adminsQuery.isFetching ? 'Refreshing…' : `${(adminsQuery.data || []).length} total`}
-                </span>
-              </div>
-
-              {adminsQuery.isLoading ? (
-                <div className={styles.modalEmpty}>Loading admin accounts…</div>
-              ) : (adminsQuery.data || []).length === 0 ? (
-                <div className={styles.modalEmpty}>No admin accounts yet. Create one below.</div>
-              ) : (
-                <table className={styles.adminTable}>
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Email</th>
-                      <th>Status</th>
-                      <th>Created</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(adminsQuery.data || []).map((a) => (
-                      <tr key={a.id}>
-                        <td>{a.displayName || '—'}</td>
-                        <td>{a.email}</td>
-                        <td>{a.isActive ? 'Active' : 'Inactive'}</td>
-                        <td>{fmtDate(a.createdAt)}</td>
+                {adminsQuery.isLoading ? (
+                  <div className={styles.modalEmpty}>Loading admin accounts…</div>
+                ) : (adminsQuery.data || []).length === 0 ? (
+                  <div className={styles.modalEmpty}>No admin accounts yet. Create one in the next tab.</div>
+                ) : (
+                  <table className={styles.adminTable}>
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>Status</th>
+                        <th>Created</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </section>
+                    </thead>
+                    <tbody>
+                      {(adminsQuery.data || []).map((a) => (
+                        <tr key={a.id}>
+                          <td>{a.displayName || '—'}</td>
+                          <td>{a.email}</td>
+                          <td>{a.isActive ? 'Active' : 'Inactive'}</td>
+                          <td>{fmtDate(a.createdAt)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </section>
+            )}
 
-            {/* create admin */}
-            <section className={styles.modalSection}>
-              <h4>Create admin account</h4>
-              <form className={styles.modalForm} onSubmit={handleCreateAdmin}>
-                <div className={styles.formGroup}>
-                  <label htmlFor="modal-admin-email">Admin email</label>
-                  <Input
-                    id="modal-admin-email"
-                    required
-                    type="email"
-                    value={adminDraft.email}
-                    onChange={(e) => setAdminDraft((p) => ({ ...p, email: e.target.value }))}
-                  />
-                </div>
-                <div className={styles.formGroup}>
-                  <label htmlFor="modal-admin-name">Display name</label>
-                  <Input
-                    id="modal-admin-name"
-                    required
-                    value={adminDraft.displayName}
-                    onChange={(e) => setAdminDraft((p) => ({ ...p, displayName: e.target.value }))}
-                  />
-                </div>
-                <div className={styles.checkboxRow}>
+            {/* TAB: Create admin */}
+            {manageTab === 'Create admin' && (
+              <section className={styles.modalSection}>
+                <h4>Create admin account</h4>
+                <form className={styles.modalForm} onSubmit={handleCreateAdmin}>
+                  <div className={styles.formGroup}>
+                    <label htmlFor="modal-admin-email">Admin email</label>
+                    <Input
+                      id="modal-admin-email"
+                      required
+                      type="email"
+                      value={adminDraft.email}
+                      onChange={(e) => setAdminDraft((p) => ({ ...p, email: e.target.value }))}
+                    />
+                  </div>
+                  <div className={styles.formGroup}>
+                    <label htmlFor="modal-admin-name">Display name</label>
+                    <Input
+                      id="modal-admin-name"
+                      required
+                      value={adminDraft.displayName}
+                      onChange={(e) => setAdminDraft((p) => ({ ...p, displayName: e.target.value }))}
+                    />
+                  </div>
+
+                  <div className={styles.formRow}>
+                    <div className={styles.formGroup}>
+                      <label htmlFor="modal-admin-password">Password</label>
+                      <Input
+                        id="modal-admin-password"
+                        required
+                        type="password"
+                        value={adminDraft.password}
+                        onChange={(e) => setAdminDraft((p) => ({ ...p, password: e.target.value }))}
+                        placeholder="Min 8 characters"
+                      />
+                    </div>
+                    <div className={styles.formGroup}>
+                      <label htmlFor="modal-admin-password-confirm">Confirm password</label>
+                      <Input
+                        id="modal-admin-password-confirm"
+                        required
+                        type="password"
+                        value={adminDraft.passwordConfirm}
+                        onChange={(e) => setAdminDraft((p) => ({ ...p, passwordConfirm: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Reactivate checkbox removed per spec */}
+
+                  {adminFeedback ? <div className={styles.feedback}>{adminFeedback}</div> : null}
+                  {adminError ? <div className={styles.error}>{adminError}</div> : null}
+
+                  <Button type="submit" disabled={adminCreateMutation.isPending}>
+                    {adminCreateMutation.isPending ? 'Creating…' : 'Create admin'}
+                  </Button>
+                </form>
+              </section>
+            )}
+
+            {/* TAB: Danger */}
+            {manageTab === 'Danger' && (
+              <section className={styles.modalSection}>
+                <h4>Delete organization</h4>
+                <p className={styles.muted}>
+                  Removing this organization permanently deletes all accounts, studies, forms, tasks, and patient records.
+                </p>
+                <label className={styles.checkboxRow}>
                   <input
                     type="checkbox"
-                    id="modal-activate-org"
-                    checked={adminDraft.activateOrg}
-                    onChange={(e) => setAdminDraft((p) => ({ ...p, activateOrg: e.target.checked }))}
+                    checked={deleteConfirm}
+                    onChange={(e) => setDeleteConfirm(e.target.checked)}
                   />
-                  <label htmlFor="modal-activate-org">Reactivate this organization if currently inactive</label>
-                </div>
-
-                {adminFeedback ? <div className={styles.feedback}>{adminFeedback}</div> : null}
-                {adminError ? <div className={styles.error}>{adminError}</div> : null}
-
-                <Button type="submit" disabled={adminCreateMutation.isPending}>
-                  {adminCreateMutation.isPending ? 'Creating…' : 'Create admin'}
+                  <span>I understand this action cannot be undone.</span>
+                </label>
+                {deleteError ? <div className={styles.error}>{deleteError}</div> : null}
+                <Button
+                  type="button"
+                  className={styles.dangerButton}
+                  variant="outline"
+                  disabled={!deleteConfirm || deleteMutation.isPending}
+                  onClick={() => manageOrgId && deleteMutation.mutate(manageOrgId)}
+                >
+                  {deleteMutation.isPending ? 'Deleting…' : 'Delete organization'}
                 </Button>
-              </form>
-            </section>
-
-            {/* destructive */}
-            <section className={styles.modalSection}>
-              <h4>Delete organization</h4>
-              <p className={styles.muted}>
-                Removing this organization permanently deletes all accounts, studies, forms, tasks, and patient records.
-              </p>
-              <label className={styles.checkboxRow}>
-                <input
-                  type="checkbox"
-                  checked={deleteConfirm}
-                  onChange={(e) => setDeleteConfirm(e.target.checked)}
-                />
-                <span>I understand this action cannot be undone.</span>
-              </label>
-              {deleteError ? <div className={styles.error}>{deleteError}</div> : null}
-              <Button
-                type="button"
-                className={styles.dangerButton}
-                variant="outline"
-                disabled={!deleteConfirm || deleteMutation.isPending}
-                onClick={() => manageOrgId && deleteMutation.mutate(manageOrgId)}
-              >
-                {deleteMutation.isPending ? 'Deleting…' : 'Delete organization'}
-              </Button>
-            </section>
+              </section>
+            )}
           </CardContent>
         </Card>
       </Modal>

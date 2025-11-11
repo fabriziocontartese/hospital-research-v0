@@ -1,12 +1,13 @@
 import axios from 'axios';
 
-// Prefer explicit env; otherwise assume CRA dev server on 3000 → API on 127.0.0.1:4000
+// Use localhost to match server CORS defaults.
+// If REACT_APP_API_BASE is set, it still wins.
 const explicit = process.env.REACT_APP_API_BASE && process.env.REACT_APP_API_BASE.trim();
 const inferredDev =
   (!explicit &&
     typeof window !== 'undefined' &&
     window.location.port === '3000')
-    ? 'http://127.0.0.1:4000'
+    ? 'http://localhost:4000'
     : null;
 
 const baseURL = explicit || inferredDev || '/api';
@@ -31,7 +32,7 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
-// Optional: single automatic refresh on 401
+// Single automatic refresh on 401
 let refreshing = null;
 apiClient.interceptors.response.use(
   (r) => r,

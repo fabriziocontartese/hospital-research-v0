@@ -1,5 +1,15 @@
 const { Schema, model } = require('mongoose');
 
+const refreshTokenSchema = new Schema(
+  {
+    tokenId: { type: String, required: true },      // tid in JWT
+    tokenHash: { type: String, required: true },    // argon2 hash of refresh token
+    createdAt: { type: Date, default: Date.now },
+    expiresAt: { type: Date },                      // from JWT exp
+  },
+  { _id: false }
+);
+
 const userSchema = new Schema(
   {
     email: {
@@ -8,6 +18,7 @@ const userSchema = new Schema(
       unique: true,
       lowercase: true,
       trim: true,
+      index: true,
     },
     passwordHash: {
       type: String,
@@ -22,6 +33,7 @@ const userSchema = new Schema(
       type: String,
       enum: ['superadmin', 'admin', 'researcher', 'staff'],
       default: 'researcher',
+      index: true,
     },
     category: {
       type: String,
@@ -31,10 +43,17 @@ const userSchema = new Schema(
     orgId: {
       type: Schema.Types.ObjectId,
       ref: 'Organization',
+      index: true,
     },
     isActive: {
       type: Boolean,
       default: true,
+      index: true,
+    },
+    // Persist refresh tokens (required by utils/jwt.js create/verify/revoke)
+    refreshTokens: {
+      type: [refreshTokenSchema],
+      default: [],
     },
   },
   {
