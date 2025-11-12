@@ -11,6 +11,7 @@ const {
   signAccessToken,
   createRefreshToken,
   verifyRefreshToken,
+  revokeRefreshToken,
 } = require('../utils/jwt');
 
 const { validateBody } = require('../utils/validate');
@@ -22,11 +23,6 @@ const loginSchema = z.object({
   password: z.string().min(8),
 });
 
-/**
- * Gate: allow superadmin always.
- * For non-superadmin, require a valid org that isActive === true.
- * We do NOT require org.status === 'approved' to avoid blocking fresh orgs.
- */
 const ensureActiveOrganization = async (user) => {
   if (user.role === 'superadmin') return;
 
@@ -79,48 +75,22 @@ router.post(
   validateBody(loginSchema),
   async (req, res, next) => {
     try {
-      // eslint-disable-next-line no-console
-      console.info('[auth:login] attempt', {
-        body: req.body,
-        headers: {
-          origin: req.headers.origin,
-          referer: req.headers.referer,
-          'user-agent': req.headers['user-agent'],
-        },
-      });
-
       const { email, password } = req.validatedBody;
-      // eslint-disable-next-line no-console
-      console.info('[auth:login] validatedBody', { email, bodyKeys: Object.keys(req.body || {}) });
 
       const user = await User.findOne({ email: email.toLowerCase() });
-
       if (!user || !user.isActive) {
         const error = new Error('Invalid credentials');
         error.status = 401;
         throw error;
       }
-
       if (!user.passwordHash) {
-        // eslint-disable-next-line no-console
-        console.warn('[auth:login] missing password hash', {
-          userId: user._id,
-          email: user.email,
-        });
         const error = new Error('Invalid credentials');
         error.status = 401;
         throw error;
       }
 
-      let passwordValid = false;
-      try {
-        passwordValid = await argon2.verify(user.passwordHash, password);
-      } catch (_verifyError) {
-        const error = new Error('Invalid credentials');
-        error.status = 401;
-        throw error;
-      }
-      if (!passwordValid) {
+      const ok = await argon2.verify(user.passwordHash, password).catch(() => false);
+      if (!ok) {
         const error = new Error('Invalid credentials');
         error.status = 401;
         throw error;
@@ -130,13 +100,6 @@ router.post(
 
       const accessToken = signAccessToken(user);
       const refreshToken = await createRefreshToken(user);
-
-      // eslint-disable-next-line no-console
-      console.info('[auth:login] success', {
-        userId: user._id,
-        role: user.role,
-        orgId: user.orgId,
-      });
 
       res.json({
         accessToken,
@@ -150,13 +113,6 @@ router.post(
         },
       });
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[auth:login] failed', {
-        message: error.message,
-        stack: error.stack,
-        status: error.status,
-        code: error.code,
-      });
       next(normalizeDbError(error));
     }
   }
@@ -171,15 +127,6 @@ router.post(
   validateBody(refreshSchema),
   async (req, res, next) => {
     try {
-      // eslint-disable-next-line no-console
-      console.info('[auth:refresh] attempt', {
-        headers: {
-          origin: req.headers.origin,
-          referer: req.headers.referer,
-          'user-agent': req.headers['user-agent'],
-        },
-      });
-
       const { refreshToken } = req.validatedBody;
       const decoded = jwt.decode(refreshToken);
       if (!decoded?.sub) {
@@ -188,13 +135,8 @@ router.post(
         throw error;
       }
       const user = await User.findById(decoded.sub);
-      if (!user) {
+      if (!user || !user.isActive) {
         const error = new Error('Invalid session');
-        error.status = 401;
-        throw error;
-      }
-      if (!user.isActive) {
-        const error = new Error('Account disabled');
         error.status = 401;
         throw error;
       }
@@ -203,32 +145,15 @@ router.post(
 
       const verified = await verifyRefreshToken(refreshToken, user);
 
-      // rotate
       const accessToken = signAccessToken(user);
       const newRefreshToken = await createRefreshToken(user);
 
-      // revoke the one we just used
-      const { revokeRefreshToken } = require('../utils/jwt');
       await revokeRefreshToken(user, verified.tid);
-
-      // eslint-disable-next-line no-console
-      console.info('[auth:refresh] success', {
-        userId: user._id,
-        role: user.role,
-        orgId: user.orgId,
-      });
 
       res.json({ accessToken, refreshToken: newRefreshToken });
     } catch (error) {
       const normalized = normalizeDbError(error);
       normalized.status = normalized.status || 401;
-      // eslint-disable-next-line no-console
-      console.error('[auth:refresh] failed', {
-        message: normalized.message,
-        stack: normalized.stack,
-        status: normalized.status,
-        code: normalized.code,
-      });
       next(normalized);
     }
   }
@@ -239,40 +164,19 @@ router.post(
   validateBody(refreshSchema),
   async (req, res, next) => {
     try {
-      // eslint-disable-next-line no-console
-      console.info('[auth:logout] attempt', {
-        headers: {
-          origin: req.headers.origin,
-          referer: req.headers.referer,
-          'user-agent': req.headers['user-agent'],
-        },
-      });
-
       const { refreshToken } = req.validatedBody;
       const decoded = jwt.decode(refreshToken);
-      if (!decoded?.sub) {
-        return res.status(200).json({ ok: true });
-      }
+      if (!decoded?.sub) return res.status(200).json({ ok: true });
+
       const user = await User.findById(decoded.sub);
-      if (!user) {
-        return res.status(200).json({ ok: true });
-      }
-      const { verifyRefreshToken, revokeRefreshToken } = require('../utils/jwt');
+      if (!user) return res.status(200).json({ ok: true });
+
       const verified = await verifyRefreshToken(refreshToken, user);
       await revokeRefreshToken(user, verified.tid);
-      // eslint-disable-next-line no-console
-      console.info('[auth:logout] success', { userId: user._id });
+
       return res.json({ ok: true });
     } catch (error) {
-      const normalized = normalizeDbError(error);
-      // eslint-disable-next-line no-console
-      console.error('[auth:logout] failed', {
-        message: normalized.message,
-        stack: normalized.stack,
-        status: normalized.status,
-        code: normalized.code,
-      });
-      return next(normalized);
+      next(normalizeDbError(error));
     }
   }
 );

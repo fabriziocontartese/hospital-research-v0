@@ -1,0 +1,2404 @@
+
+
+===== FILE: client/src/lib/apiClient.js =====
+import axios from 'axios';
+
+const explicit = process.env.REACT_APP_API_BASE && process.env.REACT_APP_API_BASE.trim();
+const inferredDev =
+  (!explicit &&
+    typeof window !== 'undefined' &&
+    (window.location.port === '3000' || window.location.port === '5173'))
+    ? 'http://127.0.0.1:4000'
+    : null;
+
+const baseURL = explicit || inferredDev || '/api';
+
+export const apiClient = axios.create({
+  baseURL,
+  withCredentials: true,
+});
+
+/* session helpers */
+const KEY = 'hospital-research-session';
+const read = () => { try { return JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { return null; } };
+const write = (s) => { if (s) localStorage.setItem(KEY, JSON.stringify(s)); else localStorage.removeItem(KEY); };
+
+/* attach Authorization */
+apiClient.interceptors.request.use((config) => {
+  const token = read()?.accessToken;
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
+/* 401 handler with guards + single-flight */
+let refreshPromise = null;
+
+const isAuthEndpoint = (url) => {
+  try {
+    // handle relative and absolute URLs
+    const u = url.startsWith('http') ? new URL(url) : new URL(url, baseURL.endsWith('/') ? baseURL : `${baseURL}/`);
+    return u.pathname.endsWith('/api/auth/refresh')
+        || u.pathname.endsWith('/api/auth/login')
+        || u.pathname.endsWith('/api/auth/logout');
+  } catch {
+    return url.includes('/api/auth/refresh') || url.includes('/api/auth/login') || url.includes('/api/auth/logout');
+  }
+};
+
+apiClient.interceptors.response.use(
+  (r) => r,
+  async (err) => {
+    const res = err.response;
+    const original = err.config || {};
+    const url = original.url || '';
+
+    if (!res || res.status !== 401 || original._retry || isAuthEndpoint(url)) {
+      throw err;
+    }
+
+    original._retry = true;
+
+    const session = read();
+    const rt = session?.refreshToken;
+    if (!rt) throw err;
+
+    if (!refreshPromise) {
+      refreshPromise = apiClient.post('/api/auth/refresh', { refreshToken: rt })
+        .then(({ data }) => {
+          write({ ...(session || {}), ...data });
+          return data.accessToken;
+        })
+        .catch((e) => { write(null); throw e; })
+        .finally(() => { refreshPromise = null; });
+    }
+
+    const newAccess = await refreshPromise;
+    original.headers = { ...(original.headers || {}), Authorization: `Bearer ${newAccess}` };
+    return apiClient(original);
+  }
+);
+
+
+===== FILE: client/src/lib/auth.js =====
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+
+const STORAGE_KEY = 'hospital-research-session';
+const subscribers = new Set();
+
+const readSession = () => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+    return JSON.parse(raw);
+  } catch (error) {
+    console.error('Failed to parse session', error);
+    return null;
+  }
+};
+
+const writeSession = (session) => {
+  if (typeof window === 'undefined') return;
+  if (!session) {
+    window.localStorage.removeItem(STORAGE_KEY);
+  } else {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+  }
+  subscribers.forEach((cb) => cb(session));
+};
+
+export const getSession = () => readSession();
+
+export const saveSession = (session) => {
+  writeSession(session);
+};
+
+export const clearSession = () => {
+  writeSession(null);
+};
+
+export const updateTokens = ({ accessToken, refreshToken }) => {
+  const current = readSession();
+  if (!current) return;
+  const updated = {
+    ...current,
+    accessToken: accessToken || current.accessToken,
+    refreshToken: refreshToken || current.refreshToken,
+  };
+  writeSession(updated);
+};
+
+const subscribe = (cb) => {
+  subscribers.add(cb);
+  return () => subscribers.delete(cb);
+};
+
+const AuthContext = createContext({
+  user: null,
+  accessToken: null,
+  refreshToken: null,
+  isAuthenticated: false,
+  loading: true,
+  setSession: () => {},
+  logout: () => {},
+});
+
+export const AuthProvider = ({ children }) => {
+  const [session, setSession] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setSession(readSession());
+    setLoading(false);
+    const unsubscribe = subscribe((next) => {
+      setSession(next);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const value = useMemo(
+    () => ({
+      user: session?.user ?? null,
+      accessToken: session?.accessToken ?? null,
+      refreshToken: session?.refreshToken ?? null,
+      isAuthenticated: Boolean(session?.accessToken && session?.user),
+      loading,
+      setSession: (nextSession) => saveSession(nextSession),
+      logout: () => clearSession(),
+    }),
+    [session, loading]
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+};
+
+export const useAuth = () => useContext(AuthContext);
+
+
+===== FILE: client/src/routes/ProtectedRoute.jsx =====
+import { Navigate, useLocation } from 'react-router-dom';
+import { useAuth } from '../lib/auth';
+
+export const ProtectedRoute = ({ allowedRoles, children, fallbackPath }) => {
+  const location = useLocation();
+  const { isAuthenticated, user, loading } = useAuth();
+
+  if (loading) {
+    return null;
+  }
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace state={{ from: location }} />;
+  }
+
+  if (allowedRoles && !allowedRoles.includes(user.role)) {
+    const defaultFallback = user.role === 'superadmin' ? '/platform/organizations' : '/dashboard';
+    const target = fallbackPath || defaultFallback;
+    return <Navigate to={target} replace />;
+  }
+
+  return children;
+};
+
+
+===== FILE: client/src/pages/Dashboard.jsx =====
+import { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { useAuth } from '../lib/auth';
+import { apiClient } from '../lib/apiClient';
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
+import { Badge } from '../components/ui/Badge';
+import styles from '../styles/DashboardPage.module.css';
+
+const statusVariant = (status) => {
+  switch (status) {
+    case 'submitted':
+      return 'success';
+    case 'expired':
+      return 'danger';
+    case 'open':
+      return 'primary';
+    default:
+      return 'neutral';
+  }
+};
+
+const statusLabel = (status) => {
+  switch (status) {
+    case 'submitted':
+      return 'Completed';
+    case 'expired':
+      return 'Overdue';
+    case 'open':
+      return 'Pending';
+    default:
+      return status;
+  }
+};
+
+const Dashboard = () => {
+  const { user } = useAuth();
+
+  const allowStudies = user.role !== 'staff';
+  const allowPopulation = user.role !== 'staff';
+
+  const studiesQuery = useQuery({
+    queryKey: ['studies'],
+    queryFn: async () => {
+      const response = await apiClient.get('/api/studies');
+      return response.data.studies;
+    },
+    enabled: allowStudies,
+  });
+
+  const tasksQuery = useQuery({
+    queryKey: ['dashboard', 'tasks'],
+    queryFn: async () => {
+      const response = await apiClient.get('/api/tasks');
+      return response.data.tasks;
+    },
+  });
+
+  const patientsQuery = useQuery({
+    queryKey: ['patients'],
+    queryFn: async () => {
+      const response = await apiClient.get('/api/patients');
+      return response.data.patients;
+    },
+    enabled: allowPopulation,
+  });
+
+  const stats = useMemo(() => {
+    const studies = studiesQuery.data || [];
+    const tasks = tasksQuery.data || [];
+    const patients = patientsQuery.data || [];
+
+    const activeStudies = studies.filter((s) => s.status === 'active').length;
+    const completedTasks = tasks.filter((t) => t.status === 'submitted').length;
+    const totalTasks = tasks.length;
+    const activePopulation = patients.filter((p) => {
+      if (p.status) return p.status === 'active';
+      if (typeof p.isActive === 'boolean') return p.isActive;
+      return true;
+    }).length;
+
+    return {
+      activeStudies: allowStudies ? activeStudies : null,
+      tasksCompleted: completedTasks,
+      tasksTotal: totalTasks,
+      activePopulation: allowPopulation ? activePopulation : null,
+    };
+  }, [allowStudies, allowPopulation, studiesQuery.data, tasksQuery.data, patientsQuery.data]);
+
+  const recentTasks = (tasksQuery.data || []).slice(0, 6);
+
+  return (
+    <div className={styles.page}>
+      <header className={styles.header}>
+        <div>
+          <h1>Welcome back, {user.displayName || user.email}</h1>
+        </div>
+        <Badge variant="neutral">{user.role}</Badge>
+      </header>
+
+      <p className={styles.headerBlurb}>
+        Overview of ongoing research and patients.
+      </p>
+
+      {/* Lean, left-to-right compact stats */}
+      <section className={styles.compactStatsRow}>
+        <Card className={styles.compactCard}>
+          <CardHeader className={styles.compactHeader}>
+            <CardTitle className={styles.compactTitle}>Active Studies</CardTitle>
+          </CardHeader>
+          <CardContent className={styles.compactValue}>
+            {stats.activeStudies ?? '—'}
+          </CardContent>
+        </Card>
+
+        <Card className={styles.compactCard}>
+          <CardHeader className={styles.compactHeader}>
+            <CardTitle className={styles.compactTitle}>Tasks completed</CardTitle>
+          </CardHeader>
+          <CardContent className={styles.compactValue}>
+            {stats.tasksCompleted} / {stats.tasksTotal}
+          </CardContent>
+        </Card>
+
+        <Card className={styles.compactCard}>
+          <CardHeader className={styles.compactHeader}>
+            <CardTitle className={styles.compactTitle}>Active Population</CardTitle>
+          </CardHeader>
+          <CardContent className={styles.compactValue}>
+            {stats.activePopulation ?? '—'}
+          </CardContent>
+        </Card>
+      </section>
+
+      <section className={styles.activitySection}>
+        <Card>
+          <CardHeader>
+            <CardTitle>Recent activity</CardTitle>
+          </CardHeader>
+          <CardContent className={styles.activityList}>
+            {tasksQuery.isLoading ? (
+              <div className={styles.emptyState}>Loading activity…</div>
+            ) : recentTasks.length === 0 ? (
+              <div className={styles.emptyState}>No activity recorded yet.</div>
+            ) : (
+              recentTasks.map((task) => (
+                <div key={task._id} className={styles.activityItem}>
+                  <div className={styles.activityInfo}>
+                    <span className={styles.activityTitle}>
+                      {task.formId?.schema?.title || task.formId?.version || 'Form assignment'}
+                    </span>
+                    <span className={styles.activityMeta}>
+                      {task.studyId?.title || 'Study'} · Patient {task.pid}
+                    </span>
+                    <span className={styles.activityMeta}>
+                      Due {task.dueAt ? new Date(task.dueAt).toLocaleDateString() : 'n/a'}
+                      {task.assignee ? ` · Assigned to ${task.assignee.displayName || task.assignee.email}` : ''}
+                    </span>
+                  </div>
+                  <Badge variant={statusVariant(task.status)}>{statusLabel(task.status)}</Badge>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+      </section>
+    </div>
+  );
+};
+
+export default Dashboard;
+
+
+===== FILE: client/src/App.jsx =====
+import { Navigate, Route, Routes } from 'react-router-dom';
+import { useAuth } from './lib/auth';
+import { ProtectedRoute } from './routes/ProtectedRoute';
+import Login from './pages/Login';
+import OrgRegister from './pages/OrgRegister';
+import Dashboard from './pages/Dashboard';
+import Users from './pages/Users';
+import Studies from './pages/Studies';
+import StudyDetail from './pages/StudyDetail';
+import FormRunner from './pages/FormRunner';
+import Population from './pages/Population';
+import Patient from './pages/Patient';
+import Tasks from './pages/Tasks';
+import PlatformOrganizations from './pages/PlatformOrganizations';
+import { MainLayout } from './components/MainLayout';
+
+const App = () => {
+  const { isAuthenticated, loading, user } = useAuth();
+  let defaultRoute = '/dashboard';
+  if (user?.role === 'staff') {
+    defaultRoute = '/tasks';
+  } else if (user?.role === 'superadmin') {
+    defaultRoute = '/platform/organizations';
+  }
+
+  if (loading) {
+    return null;
+  }
+
+  return (
+    <>
+      {isAuthenticated ? (
+        <MainLayout>
+          <Routes>
+            <Route path="/" element={<Navigate to={defaultRoute} replace />} />
+            <Route
+              path="/platform/organizations"
+              element={
+                <ProtectedRoute allowedRoles={['superadmin']} fallbackPath="/platform/organizations">
+                  <PlatformOrganizations />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/dashboard"
+              element={
+                <ProtectedRoute allowedRoles={['admin', 'researcher']} fallbackPath="/tasks">
+                  <Dashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/users"
+              element={
+                <ProtectedRoute allowedRoles={['admin']} fallbackPath="/tasks">
+                  <Users />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/studies"
+              element={
+                <ProtectedRoute allowedRoles={['admin', 'researcher']} fallbackPath="/tasks">
+                  <Studies />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/studies/:studyId"
+              element={
+                <ProtectedRoute allowedRoles={['admin', 'researcher']} fallbackPath="/tasks">
+                  <StudyDetail />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/population"
+              element={
+                <ProtectedRoute allowedRoles={['admin', 'researcher', 'staff']}>
+                  <Population />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/patients/:pid"
+              element={
+                <ProtectedRoute allowedRoles={['admin', 'researcher', 'staff']}>
+                  <Patient />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/tasks"
+              element={
+                <ProtectedRoute allowedRoles={['admin', 'researcher', 'staff']}>
+                  <Tasks />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/forms/:formId"
+              element={
+                <ProtectedRoute allowedRoles={['admin', 'researcher', 'staff']}>
+                  <FormRunner />
+                </ProtectedRoute>
+              }
+            />
+            <Route path="*" element={<Navigate to={defaultRoute} replace />} />
+          </Routes>
+        </MainLayout>
+      ) : (
+        <Routes>
+          <Route path="/" element={<Navigate to="/login" replace />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/request-access" element={<OrgRegister />} />
+          <Route path="*" element={<Navigate to="/login" replace />} />
+        </Routes>
+      )}
+    </>
+  );
+};
+
+export default App;
+
+
+===== FILE: client/src/main.jsx =====
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import { BrowserRouter } from 'react-router-dom';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
+import App from './App';
+import { queryClient } from './lib/queryClient';
+import { AuthProvider } from './lib/auth';
+import './index.css';
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <React.StrictMode>
+    <AuthProvider>
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <App />
+        </BrowserRouter>
+        {process.env.NODE_ENV !== 'production' && <ReactQueryDevtools initialIsOpen={false} />}
+      </QueryClientProvider>
+    </AuthProvider>
+  </React.StrictMode>
+);
+
+
+===== FILE: server/src/app.js =====
+const express = require('express');
+const cors = require('cors');
+const morgan = require('morgan');
+const cookieParser = require('cookie-parser');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const mongoSanitize = require('express-mongo-sanitize');
+const jwt = require('jsonwebtoken');
+const config = require('./config/env');
+const authRoutes = require('./routes/auth.routes');
+const orgRoutes = require('./routes/org.routes');
+const usersRoutes = require('./routes/users.routes');
+const patientsRoutes = require('./routes/patients.routes');
+const studiesRoutes = require('./routes/studies.routes');
+const formsRoutes = require('./routes/forms.routes');
+const tasksRoutes = require('./routes/tasks.routes');
+const superadminRoutes = require('./routes/superadmin.routes');
+const { notFoundHandler, errorHandler } = require('./middleware/error');
+
+const app = express();
+
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
+
+const corsOptions = {
+  origin(origin, callback) {
+    if (!origin || config.corsAllowlist.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error('Not allowed by CORS'), false);
+  },
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
+app.use(
+  helmet({
+    contentSecurityPolicy: config.nodeEnv === 'production' ? undefined : false,
+    crossOriginResourcePolicy: false,
+  })
+);
+app.use(express.json({ limit: '1mb' }));
+app.use(cookieParser());
+
+const sanitizeRequest = (req, _res, next) => {
+  const fieldsToSanitize = ['body', 'params', 'headers'];
+  fieldsToSanitize.forEach((key) => {
+    if (req[key]) {
+      mongoSanitize.sanitize(req[key]);
+    }
+  });
+  if (req.query) {
+    mongoSanitize.sanitize(req.query);
+  }
+  next();
+};
+
+app.use(sanitizeRequest);
+
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// More generous in dev and per-user where possible
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: process.env.NODE_ENV === 'production' ? 30 : 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    const rt = req.body && req.body.refreshToken;
+    try {
+      const sub = jwt.decode(rt)?.sub;
+      return sub || req.ip;
+    } catch {
+      return req.ip;
+    }
+  },
+});
+
+if (config.nodeEnv !== 'test') {
+  app.use(globalLimiter);
+  app.use('/api/auth/login', authLimiter);
+  app.use('/api/auth/refresh', authLimiter);
+}
+
+if (config.nodeEnv !== 'test') {
+  app.use(morgan('dev'));
+}
+
+app.get('/health', (_req, res) => {
+  res.json({ status: 'ok' });
+});
+
+app.use('/api/auth', authRoutes);
+app.use('/api/org', orgRoutes);
+app.use('/api/users', usersRoutes);
+app.use('/api/patients', patientsRoutes);
+app.use('/api/studies', studiesRoutes);
+app.use('/api/forms', formsRoutes);
+app.use('/api/tasks', tasksRoutes);
+app.use('/api/superadmin', superadminRoutes);
+
+app.use(notFoundHandler);
+app.use(errorHandler);
+
+module.exports = app;
+
+
+===== FILE: server/src/index.js =====
+const config = require('./config/env');
+const { connectDb } = require('./config/db');
+const app = require('./app');
+
+const start = async () => {
+  // bind HTTP first
+  const server = app.listen(config.port, () => {
+    console.log(`HTTP listening on ${config.port}`);
+  });
+  server.on('error', (err) => {
+    console.error('HTTP server error:', err);
+    process.exit(1);
+  });
+
+  // connect DB with retry and clear logs
+  const maxRetries = 5;
+  const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+  for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+    try {
+      console.log(`[db] connect attempt ${attempt}/${maxRetries}`);
+      await connectDb();
+      console.log('[db] connected');
+      break;
+    } catch (err) {
+      console.error('[db] connect failed:', err?.name, err?.code || '', err?.message);
+      if (attempt === maxRetries) {
+        console.error('[db] giving up after max retries');
+        // keep HTTP alive so /health works
+        break;
+      }
+      await delay(2000 * attempt);
+    }
+  }
+};
+
+start();
+
+
+===== FILE: server/server.js =====
+const app = require("./app");
+
+// ℹ️ Sets the PORT for our app to have access to it. If no env has been set, we hard code it to 5005
+const PORT = process.env.PORT || 5005;
+
+app.listen(PORT, () => {
+  console.log(`Server listening on http://localhost:${PORT}`);
+});
+
+
+===== FILE: server/src/config/env.js =====
+const dotenv = require('dotenv');
+
+dotenv.config();
+
+const requiredEnv = (key, defaultValue) => {
+  const value = process.env[key] ?? defaultValue;
+  if (value === undefined) {
+    throw new Error(`Missing required env var ${key}`);
+  }
+  return value;
+};
+
+module.exports = {
+  nodeEnv: process.env.NODE_ENV || 'development',
+  port: Number(process.env.PORT) || 4000,
+  mongoUri: requiredEnv('MONGO_URI', 'mongodb://127.0.0.1:27017/hospital-research'),
+  jwt: {
+    accessSecret: requiredEnv('JWT_ACCESS_SECRET', 'dev-access-secret'),
+    refreshSecret: requiredEnv('JWT_REFRESH_SECRET', 'dev-refresh-secret'),
+    accessTtl: process.env.JWT_ACCESS_TTL || '15m',
+    refreshTtl: process.env.JWT_REFRESH_TTL || '7d',
+  },
+  corsAllowlist: (process.env.CORS_ALLOWLIST ||
+    'http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean),
+};
+
+
+===== FILE: server/src/config/db.js =====
+const mongoose = require('mongoose');
+const config = require('./env');
+
+mongoose.set('strictQuery', true);
+
+const connectDb = async () => {
+  if (mongoose.connection.readyState === 1) {
+    return mongoose.connection;
+  }
+  await mongoose.connect(config.mongoUri, {
+    autoIndex: config.nodeEnv !== 'production',
+  });
+  return mongoose.connection;
+};
+
+const disconnectDb = async () => {
+  if (mongoose.connection.readyState !== 0) {
+    await mongoose.disconnect();
+  }
+};
+
+module.exports = {
+  connectDb,
+  disconnectDb,
+};
+
+
+===== FILE: server/src/middleware/auth.js =====
+const { verifyAccessToken } = require('../utils/jwt');
+const User = require('../models/User');
+const Organization = require('../models/Organization');
+
+const authMiddleware = async (req, _res, next) => {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7).trim() : null;
+
+  if (!token) {
+    console.error('No Authorization header or invalid format'); // Debugging log
+    const error = new Error('Authentication required');
+    error.status = 401;
+    return next(error);
+  }
+
+  console.log('Received token:', token); // Debugging log
+
+  try {
+    const decoded = verifyAccessToken(token);
+    console.log('Decoded token:', decoded); // Debugging log
+    const user = await User.findById(decoded.sub);
+    if (!user || !user.isActive) {
+      console.error('Invalid user session'); // Debugging log
+      const error = new Error('Invalid user session');
+      error.status = 401;
+      throw error;
+    }
+    if (user.role !== 'superadmin') {
+      const org = await Organization.findById(user.orgId);
+      if (!org || !org.isActive || org.status !== 'approved') {
+        console.error('Organization is not active'); // Debugging log
+        const error = new Error('Organization is not active');
+        error.status = 403;
+        throw error;
+      }
+    }
+    req.auth = decoded;
+    req.user = user;
+    return next();
+  } catch (err) {
+    console.error('Token verification failed:', err.message); // Debugging log
+    const error = new Error('Invalid or expired token');
+    error.status = 401;
+    return next(error);
+  }
+};
+
+module.exports = authMiddleware;
+
+
+===== FILE: server/src/middleware/rbac.js =====
+const requireRole = (...roles) => (req, _res, next) => {
+  if (!req.user) {
+    const error = new Error('Authentication required');
+    error.status = 401;
+    return next(error);
+  }
+
+  if (req.user.role === 'superadmin') {
+    return next();
+  }
+
+  if (!roles.includes(req.user.role)) {
+    const error = new Error('Forbidden');
+    error.status = 403;
+    return next(error);
+  }
+
+  return next();
+};
+
+const scopeStudyAccess = (user, baseQuery = {}) => {
+  if (!user) {
+    throw new Error('User context missing');
+  }
+
+  if (user.role === 'superadmin') {
+    return baseQuery;
+  }
+
+  if (user.role === 'admin') {
+    return {
+      ...baseQuery,
+      orgId: user.orgId,
+    };
+  }
+
+  if (user.role === 'researcher') {
+    return {
+      ...baseQuery,
+      orgId: user.orgId,
+      $or: [{ createdBy: user._id }, { assignedStaff: user._id }],
+    };
+  }
+
+  return {
+    ...baseQuery,
+    orgId: user.orgId,
+    assignedStaff: user._id,
+  };
+};
+
+const ensureOrgAccess = (user, resourceOrgId) => {
+  if (!user) {
+    const error = new Error('Authentication required');
+    error.status = 401;
+    throw error;
+  }
+
+  if (user.role === 'superadmin' || !resourceOrgId || user.role === 'admin') {
+    return;
+  }
+
+  if (user.orgId && resourceOrgId && user.orgId.toString() !== resourceOrgId.toString()) {
+    const error = new Error('Forbidden');
+    error.status = 403;
+    throw error;
+  }
+};
+
+module.exports = {
+  requireRole,
+  scopeStudyAccess,
+  ensureOrgAccess,
+};
+
+
+===== FILE: server/src/utils/jwt.js =====
+const jwt = require('jsonwebtoken');
+const argon2 = require('argon2');
+const crypto = require('crypto');
+const config = require('../config/env');
+
+const signAccessToken = (user) => {
+  const payload = {
+    sub: user._id.toString(),
+    role: user.role,
+    orgId: user.orgId ? user.orgId.toString() : null,
+  };
+  return jwt.sign(payload, config.jwt.accessSecret, { expiresIn: config.jwt.accessTtl });
+};
+
+const createRefreshToken = async (user) => {
+  const tokenId = crypto.randomUUID();
+  const payload = {
+    sub: user._id.toString(),
+    tid: tokenId,
+    role: user.role,
+    orgId: user.orgId ? user.orgId.toString() : null,
+  };
+  const refreshToken = jwt.sign(payload, config.jwt.refreshSecret, { expiresIn: config.jwt.refreshTtl });
+
+  const decoded = jwt.decode(refreshToken);
+  const expiresAt = decoded && decoded.exp ? new Date(decoded.exp * 1000) : null;
+  const tokenHash = await argon2.hash(refreshToken);
+
+  user.refreshTokens = (user.refreshTokens || []).filter((item) => !item.expiresAt || item.expiresAt > new Date());
+  user.refreshTokens.push({ tokenId, tokenHash, createdAt: new Date(), expiresAt });
+  await user.save();
+
+  return refreshToken;
+};
+
+const verifyAccessToken = (token) => jwt.verify(token, config.jwt.accessSecret);
+
+const verifyRefreshToken = async (refreshToken, user) => {
+  const decoded = jwt.verify(refreshToken, config.jwt.refreshSecret);
+  if (!decoded?.tid) throw new Error('Invalid refresh token');
+  const entry = (user.refreshTokens || []).find((item) => item.tokenId === decoded.tid);
+  if (!entry) throw new Error('Refresh token revoked');
+  const matches = await argon2.verify(entry.tokenHash, refreshToken);
+  if (!matches) throw new Error('Refresh token mismatch');
+  return decoded;
+};
+
+const revokeRefreshToken = async (user, tokenId) => {
+  user.refreshTokens = (user.refreshTokens || []).filter((item) => item.tokenId !== tokenId);
+  await user.save();
+};
+
+const revokeAllRefreshTokens = async (user) => {
+  user.refreshTokens = [];
+  await user.save();
+};
+
+module.exports = {
+  signAccessToken,
+  createRefreshToken,
+  verifyAccessToken,
+  verifyRefreshToken,
+  revokeRefreshToken,
+  revokeAllRefreshTokens,
+};
+
+
+===== FILE: server/src/routes/auth.routes.js =====
+const express = require('express');
+const { z } = require('zod');
+const mongoose = require('mongoose');
+const argon2 = require('argon2');
+const jwt = require('jsonwebtoken');
+
+const User = require('../models/User');
+const Organization = require('../models/Organization');
+
+const {
+  signAccessToken,
+  createRefreshToken,
+  verifyRefreshToken,
+} = require('../utils/jwt');
+
+const { validateBody } = require('../utils/validate');
+
+const router = express.Router();
+
+const loginSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(8),
+});
+
+/**
+ * Gate: allow superadmin always.
+ * For non-superadmin, require a valid org that isActive === true.
+ * We do NOT require org.status === 'approved' to avoid blocking fresh orgs.
+ */
+const ensureActiveOrganization = async (user) => {
+  if (user.role === 'superadmin') return;
+
+  if (!user.orgId) {
+    const error = new Error('Organization is not active');
+    error.status = 403;
+    throw error;
+  }
+
+  let organization;
+  try {
+    organization = await Organization.findById(user.orgId);
+  } catch (lookupError) {
+    if (lookupError?.name === 'CastError') {
+      const error = new Error('Organization is not active');
+      error.status = 403;
+      throw error;
+    }
+    throw lookupError;
+  }
+
+  if (!organization || !organization.isActive) {
+    const error = new Error('Organization is not active');
+    error.status = 403;
+    throw error;
+  }
+};
+
+const normalizeDbError = (error) => {
+  if (error instanceof mongoose.Error && !error.status) {
+    const normalized = error;
+    normalized.status = 503;
+    normalized.code = 'database_unavailable';
+    normalized.details = [
+      {
+        path: 'database',
+        message: error.message,
+        error: error.name,
+      },
+    ];
+    normalized.originalMessage = error.message;
+    normalized.message = 'Database is currently unavailable';
+    return normalized;
+  }
+  return error;
+};
+
+router.post(
+  '/login',
+  validateBody(loginSchema),
+  async (req, res, next) => {
+    try {
+      // eslint-disable-next-line no-console
+      console.info('[auth:login] attempt', {
+        body: req.body,
+        headers: {
+          origin: req.headers.origin,
+          referer: req.headers.referer,
+          'user-agent': req.headers['user-agent'],
+        },
+      });
+
+      const { email, password } = req.validatedBody;
+      // eslint-disable-next-line no-console
+      console.info('[auth:login] validatedBody', { email, bodyKeys: Object.keys(req.body || {}) });
+
+      const user = await User.findOne({ email: email.toLowerCase() });
+
+      if (!user || !user.isActive) {
+        const error = new Error('Invalid credentials');
+        error.status = 401;
+        throw error;
+      }
+
+      if (!user.passwordHash) {
+        // eslint-disable-next-line no-console
+        console.warn('[auth:login] missing password hash', {
+          userId: user._id,
+          email: user.email,
+        });
+        const error = new Error('Invalid credentials');
+        error.status = 401;
+        throw error;
+      }
+
+      let passwordValid = false;
+      try {
+        passwordValid = await argon2.verify(user.passwordHash, password);
+      } catch (_verifyError) {
+        const error = new Error('Invalid credentials');
+        error.status = 401;
+        throw error;
+      }
+      if (!passwordValid) {
+        const error = new Error('Invalid credentials');
+        error.status = 401;
+        throw error;
+      }
+
+      await ensureActiveOrganization(user);
+
+      const accessToken = signAccessToken(user);
+      const refreshToken = await createRefreshToken(user);
+
+      // eslint-disable-next-line no-console
+      console.info('[auth:login] success', {
+        userId: user._id,
+        role: user.role,
+        orgId: user.orgId,
+      });
+
+      res.json({
+        accessToken,
+        refreshToken,
+        user: {
+          id: user._id,
+          email: user.email,
+          role: user.role,
+          displayName: user.displayName,
+          orgId: user.orgId,
+        },
+      });
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error('[auth:login] failed', {
+        message: error.message,
+        stack: error.stack,
+        status: error.status,
+        code: error.code,
+      });
+      next(normalizeDbError(error));
+    }
+  }
+);
+
+const refreshSchema = z.object({
+  refreshToken: z.string(),
+});
+
+router.post(
+  '/refresh',
+  validateBody(refreshSchema),
+  async (req, res, next) => {
+    try {
+      // eslint-disable-next-line no-console
+      console.info('[auth:refresh] attempt', {
+        headers: {
+          origin: req.headers.origin,
+          referer: req.headers.referer,
+          'user-agent': req.headers['user-agent'],
+        },
+      });
+
+      const { refreshToken } = req.validatedBody;
+      const decoded = jwt.decode(refreshToken);
+      if (!decoded?.sub) {
+        const error = new Error('Invalid session');
+        error.status = 401;
+        throw error;
+      }
+      const user = await User.findById(decoded.sub);
+      if (!user) {
+        const error = new Error('Invalid session');
+        error.status = 401;
+        throw error;
+      }
+      if (!user.isActive) {
+        const error = new Error('Account disabled');
+        error.status = 401;
+        throw error;
+      }
+
+      await ensureActiveOrganization(user);
+
+      const verified = await verifyRefreshToken(refreshToken, user);
+
+      // rotate
+      const accessToken = signAccessToken(user);
+      const newRefreshToken = await createRefreshToken(user);
+
+      // revoke the one we just used
+      const { revokeRefreshToken } = require('../utils/jwt');
+      await revokeRefreshToken(user, verified.tid);
+
+      // eslint-disable-next-line no-console
+      console.info('[auth:refresh] success', {
+        userId: user._id,
+        role: user.role,
+        orgId: user.orgId,
+      });
+
+      res.json({ accessToken, refreshToken: newRefreshToken });
+    } catch (error) {
+      const normalized = normalizeDbError(error);
+      normalized.status = normalized.status || 401;
+      // eslint-disable-next-line no-console
+      console.error('[auth:refresh] failed', {
+        message: normalized.message,
+        stack: normalized.stack,
+        status: normalized.status,
+        code: normalized.code,
+      });
+      next(normalized);
+    }
+  }
+);
+
+router.post(
+  '/logout',
+  validateBody(refreshSchema),
+  async (req, res, next) => {
+    try {
+      // eslint-disable-next-line no-console
+      console.info('[auth:logout] attempt', {
+        headers: {
+          origin: req.headers.origin,
+          referer: req.headers.referer,
+          'user-agent': req.headers['user-agent'],
+        },
+      });
+
+      const { refreshToken } = req.validatedBody;
+      const decoded = jwt.decode(refreshToken);
+      if (!decoded?.sub) {
+        return res.status(200).json({ ok: true });
+      }
+      const user = await User.findById(decoded.sub);
+      if (!user) {
+        return res.status(200).json({ ok: true });
+      }
+      const { verifyRefreshToken, revokeRefreshToken } = require('../utils/jwt');
+      const verified = await verifyRefreshToken(refreshToken, user);
+      await revokeRefreshToken(user, verified.tid);
+      // eslint-disable-next-line no-console
+      console.info('[auth:logout] success', { userId: user._id });
+      return res.json({ ok: true });
+    } catch (error) {
+      const normalized = normalizeDbError(error);
+      // eslint-disable-next-line no-console
+      console.error('[auth:logout] failed', {
+        message: normalized.message,
+        stack: normalized.stack,
+        status: normalized.status,
+        code: normalized.code,
+      });
+      return next(normalized);
+    }
+  }
+);
+
+module.exports = router;
+
+
+===== FILE: server/src/routes/studies.routes.js =====
+const express = require('express');
+const { z } = require('zod');
+const Study = require('../models/Study');
+const Form = require('../models/Form');
+const FormResponse = require('../models/FormResponse');
+const Patient = require('../models/Patient');
+const Task = require('../models/Task');
+const User = require('../models/User');
+const auth = require('../middleware/auth');
+const { requireRole, scopeStudyAccess } = require('../middleware/rbac');
+const { validateBody } = require('../utils/validate');
+
+const router = express.Router();
+
+const sanitizeAllowedVariables = (items = []) => [...new Set(items.map((item) => item.trim()).filter(Boolean))];
+
+router.get(
+  '/',
+  auth,
+  requireRole('admin', 'researcher', 'staff'),
+  async (req, res, next) => {
+    try {
+      const query = scopeStudyAccess(req.user, {});
+      const projection =
+        req.user.role === 'admin'
+          ? undefined
+          : 'code title status description assignedStaff';
+      const studies = await Study.find(query, projection).populate(
+        'assignedStaff',
+        'displayName email role category'
+      );
+      res.json({ studies });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+const createSchema = z.object({
+  code: z.string().min(2),
+  title: z.string().min(3),
+  description: z.string().max(500).optional(),
+  allowedVariables: z.array(z.string()).default([]),
+  assignedStaff: z.array(z.string()).optional(),
+  notifications: z
+    .array(
+      z.object({
+        when: z.string(),
+        toRole: z.enum(['admin', 'researcher', 'staff']),
+      })
+    )
+    .optional(),
+});
+
+router.post(
+  '/',
+  auth,
+  requireRole('admin', 'researcher'),
+  validateBody(createSchema),
+  async (req, res, next) => {
+    try {
+      const existing = await Study.findOne({ code: req.validatedBody.code, orgId: req.user.orgId });
+      if (existing) {
+        const error = new Error('Study code already exists');
+        error.status = 409;
+        throw error;
+      }
+
+      const assignedStaffIds = [];
+      if (req.validatedBody.assignedStaff?.length) {
+        const staff = await User.find({
+          _id: { $in: req.validatedBody.assignedStaff },
+          orgId: req.user.orgId,
+        });
+        assignedStaffIds.push(...staff.map((member) => member._id));
+      }
+
+      const study = await Study.create({
+        code: req.validatedBody.code,
+        title: req.validatedBody.title,
+        description: req.validatedBody.description,
+        allowedVariables: sanitizeAllowedVariables(req.validatedBody.allowedVariables),
+        assignedStaff: assignedStaffIds,
+        notifications: req.validatedBody.notifications || [],
+        orgId: req.user.orgId,
+        createdBy: req.user._id,
+      });
+
+      if (!assignedStaffIds.some((id) => id.toString() === req.user._id.toString())) {
+        study.assignedStaff.push(req.user._id);
+        await study.save();
+      }
+
+      const populated = await study.populate('assignedStaff', 'displayName email role category');
+      res.status(201).json({ study: populated });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+const ensureWritable = (user, study) => {
+  if (user.role === 'admin') return;
+  const canEdit =
+    study.createdBy?.toString() === user._id.toString() ||
+    study.assignedStaff.some((memberId) => memberId.toString() === user._id.toString());
+  if (!canEdit) {
+    const err = new Error('Forbidden');
+    err.status = 403;
+    throw err;
+  }
+};
+
+const updateSchema = z.object({
+  title: z.string().min(3).optional(),
+  status: z.enum(['draft', 'active', 'paused', 'closed']).optional(),
+  description: z.string().max(500).optional(),
+  assignedStaff: z.array(z.string()).optional(),
+  assignedPatients: z.array(z.string()).optional(),
+  notifications: z
+    .array(
+      z.object({
+        when: z.string(),
+        toRole: z.enum(['admin', 'researcher', 'staff']),
+      })
+    )
+    .optional(),
+});
+
+router.patch(
+  '/:id',
+  auth,
+  requireRole('admin', 'researcher'),
+  validateBody(updateSchema),
+  async (req, res, next) => {
+    try {
+      const study = await Study.findOne({
+        _id: req.params.id,
+        orgId: req.user.orgId,
+      });
+      if (!study) {
+        const error = new Error('Study not found');
+        error.status = 404;
+        throw error;
+      }
+
+      ensureWritable(req.user, study);
+
+      if (req.validatedBody.title) {
+        study.title = req.validatedBody.title;
+      }
+      if (req.validatedBody.status) {
+        study.status = req.validatedBody.status;
+      }
+      if (Object.prototype.hasOwnProperty.call(req.validatedBody, 'description')) {
+        study.description = req.validatedBody.description;
+      }
+      if (req.validatedBody.notifications) {
+        study.notifications = req.validatedBody.notifications;
+      }
+      if (req.validatedBody.assignedStaff) {
+        const staff = await User.find({
+          _id: { $in: req.validatedBody.assignedStaff },
+          orgId: req.user.orgId,
+        });
+        study.assignedStaff = staff.map((member) => member._id);
+      }
+      if (req.validatedBody.assignedPatients) {
+        const patients = await Patient.find({
+          pid: { $in: req.validatedBody.assignedPatients },
+          orgId: req.user.orgId,
+        });
+        study.assignedPatients = patients.map((patient) => patient.pid);
+      }
+
+      await study.save();
+      const populated = await study.populate('assignedStaff', 'displayName email role category');
+      res.json({ study: populated });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+const questionnaireItemSchema = z
+  .object({
+    linkId: z.string().min(1),
+    text: z.string().min(1),
+    type: z.enum(['text', 'dropdown', 'checkboxes', 'scale']),
+    required: z.boolean().optional(),
+    options: z.array(z.string()).optional(),
+    scale: z
+      .object({
+        min: z.number().int(),
+        max: z.number().int(),
+        step: z.number().int().min(1).optional(),
+      })
+      .optional(),
+  })
+  .superRefine((item, ctx) => {
+    if (item.type === 'dropdown' || item.type === 'checkboxes') {
+      if (!item.options || !item.options.length) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['options'],
+          message: 'Options are required for selectable questions',
+        });
+      }
+    }
+    if (item.type === 'scale') {
+      if (!item.scale) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['scale'],
+          message: 'Scale definition required',
+        });
+      } else if (item.scale.min >= item.scale.max) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['scale'],
+          message: 'Scale max must be greater than min',
+        });
+      }
+    }
+  });
+
+const formSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  items: z.array(questionnaireItemSchema).min(1),
+});
+
+const formCreateSchema = z.object({
+  kind: z.enum(['base', 'study']),
+  version: z.string().min(1),
+  schema: formSchema,
+});
+
+const formUpdateSchema = z.object({
+  version: z.string().min(1),
+  schema: formSchema,
+});
+
+router.post(
+  '/:id/forms',
+  auth,
+  requireRole('admin', 'researcher'),
+  validateBody(formCreateSchema),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const { kind, version, schema } = req.validatedBody;
+      let study = null;
+
+      if (id !== 'base') {
+        study = await Study.findOne({ _id: id, orgId: req.user.orgId });
+        if (!study) {
+          const error = new Error('Study not found');
+          error.status = 404;
+          throw error;
+        }
+        ensureWritable(req.user, study);
+      }
+
+      const form = await Form.create({
+        orgId: req.user.orgId,
+        studyId: study ? study._id : undefined,
+        kind,
+        version,
+        schema,
+        createdBy: req.user._id,
+      });
+
+      if (kind === 'base' && study) {
+        study.baseFormId = form._id;
+        await study.save();
+      }
+
+      res.status(201).json({ form });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.patch(
+  '/:id/forms/:formId',
+  auth,
+  requireRole('admin', 'researcher'),
+  validateBody(formUpdateSchema),
+  async (req, res, next) => {
+    try {
+      const { id, formId } = req.params;
+      const study = await Study.findOne({ _id: id, orgId: req.user.orgId });
+      if (!study) {
+        const error = new Error('Study not found');
+        error.status = 404;
+        throw error;
+      }
+
+      ensureWritable(req.user, study);
+
+      const form = await Form.findOne({ _id: formId, studyId: study._id, orgId: req.user.orgId });
+      if (!form) {
+        const error = new Error('Form not found');
+        error.status = 404;
+        throw error;
+      }
+
+      form.version = req.validatedBody.version;
+      form.schema = req.validatedBody.schema;
+      await form.save();
+
+      res.json({ form });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get(
+  '/:id/forms',
+  auth,
+  requireRole('admin', 'researcher'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      if (id === 'base') {
+        const forms = await Form.find({ orgId: req.user.orgId, kind: 'base' });
+        return res.json({ forms });
+      }
+
+      const study = await Study.findOne({ _id: id, orgId: req.user.orgId });
+      if (!study) {
+        const error = new Error('Study not found');
+        error.status = 404;
+        throw error;
+      }
+      ensureWritable(req.user, study);
+      const forms = await Form.find({ studyId: id }).sort({ createdAt: -1 });
+      return res.json({ forms });
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
+
+router.get(
+  '/:id/responses',
+  auth,
+  requireRole('admin', 'researcher', 'staff'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const study = await Study.findOne(scopeStudyAccess(req.user, { _id: id }));
+      if (!study) {
+        const error = new Error('Study not found');
+        error.status = 404;
+        throw error;
+      }
+
+      const responses = await FormResponse.find({
+        studyId: study._id,
+        orgId: req.user.orgId,
+      })
+        .sort({ authoredAt: -1 })
+        .populate('formId')
+        .populate('authoredBy', 'displayName email role');
+
+      res.json({ responses });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.delete(
+  '/:id',
+  auth,
+  requireRole('admin', 'researcher'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const study = await Study.findOne({ _id: id, orgId: req.user.orgId });
+      if (!study) {
+        const error = new Error('Study not found');
+        error.status = 404;
+        throw error;
+      }
+
+      ensureWritable(req.user, study);
+
+      await Promise.all([
+        Form.deleteMany({ studyId: study._id }),
+        Task.deleteMany({ studyId: study._id, orgId: req.user.orgId }),
+        FormResponse.deleteMany({ studyId: study._id, orgId: req.user.orgId }),
+      ]);
+
+      await study.deleteOne();
+      res.status(204).send();
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+module.exports = router;
+
+
+===== FILE: server/src/routes/tasks.routes.js =====
+const express = require('express');
+const { z } = require('zod');
+const auth = require('../middleware/auth');
+const { requireRole } = require('../middleware/rbac');
+const { validateBody, validateQuery } = require('../utils/validate');
+const Task = require('../models/Task');
+const Study = require('../models/Study');
+const Form = require('../models/Form');
+const FormResponse = require('../models/FormResponse');
+const { ensureAnswersSafe, ensureAnswersMatchSchema } = require('../utils/privacy');
+
+const router = express.Router();
+
+const toIdString = (value) => {
+  if (!value) return null;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object' && value._id) {
+    return value._id.toString();
+  }
+  if (typeof value.toString === 'function') {
+    return value.toString();
+  }
+  return null;
+};
+
+const ensureTaskWritable = async (user, task) => {
+  if (!task) {
+    const error = new Error('Task not found');
+    error.status = 404;
+    throw error;
+  }
+
+  if (user.role === 'admin') {
+    return;
+  }
+
+  if (user.role === 'staff') {
+    if (toIdString(task.assignee) !== user._id.toString()) {
+      const error = new Error('Forbidden');
+      error.status = 403;
+      throw error;
+    }
+    return;
+  }
+
+  if (user.role === 'researcher') {
+    const studyId = toIdString(task.studyId);
+    if (!studyId) {
+      const error = new Error('Forbidden');
+      error.status = 403;
+      throw error;
+    }
+    const study = await Study.findOne({ _id: studyId, orgId: user.orgId });
+    if (
+      !study ||
+      (toIdString(study.createdBy) !== user._id.toString() &&
+        !study.assignedStaff.some((memberId) => toIdString(memberId) === user._id.toString()))
+    ) {
+      const error = new Error('Forbidden');
+      error.status = 403;
+      throw error;
+    }
+  }
+};
+
+const ensureTaskReadable = async (user, task) => {
+  if (!task) {
+    const error = new Error('Task not found');
+    error.status = 404;
+    throw error;
+  }
+
+  if (user.role === 'admin') {
+    return;
+  }
+
+  if (user.role === 'staff') {
+    if (toIdString(task.assignee) !== user._id.toString()) {
+      const error = new Error('Forbidden');
+      error.status = 403;
+      throw error;
+    }
+    return;
+  }
+
+  if (user.role === 'researcher') {
+    if (toIdString(task.assignee) === user._id.toString()) {
+      return;
+    }
+    const studyId = toIdString(task.studyId);
+    if (!studyId) {
+      const error = new Error('Forbidden');
+      error.status = 403;
+      throw error;
+    }
+    const study = await Study.findOne({ _id: studyId, orgId: user.orgId });
+    if (
+      !study ||
+      (toIdString(study.createdBy) !== user._id.toString() &&
+        !study.assignedStaff.some((memberId) => toIdString(memberId) === user._id.toString()))
+    ) {
+      const error = new Error('Forbidden');
+      error.status = 403;
+      throw error;
+    }
+  }
+};
+
+const querySchema = z.object({
+  status: z.enum(['open', 'submitted', 'expired']).optional(),
+  studyId: z.string().optional(),
+  dueAtFrom: z.string().datetime().optional(),
+  dueAtTo: z.string().datetime().optional(),
+});
+
+router.get(
+  '/:taskId',
+  auth,
+  requireRole('admin', 'researcher', 'staff'),
+  async (req, res, next) => {
+    try {
+      const task = await Task.findOne({
+        _id: req.params.taskId,
+        orgId: req.user.orgId,
+      })
+        .populate('assignee', 'displayName email role category')
+        .populate('formId')
+        .populate('studyId');
+
+      await ensureTaskReadable(req.user, task);
+
+      const formId = task.formId?._id || task.formId;
+      const response = await FormResponse.findOne({
+        formId,
+        pid: task.pid,
+        orgId: req.user.orgId,
+      }).populate('authoredBy', 'displayName email role');
+
+      const assigneeId = toIdString(task.assignee);
+      const canSubmit =
+        req.user.role === 'admin' ||
+        req.user.role === 'researcher' ||
+        assigneeId === req.user._id.toString();
+
+      res.json({
+        task,
+        response,
+        permissions: {
+          canSubmit,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get(
+  '/',
+  auth,
+  requireRole('admin', 'researcher', 'staff'),
+  validateQuery(querySchema),
+  async (req, res, next) => {
+    try {
+      const filter = {
+        orgId: req.user.orgId,
+      };
+
+      if (req.validatedQuery.status) {
+        filter.status = req.validatedQuery.status;
+      }
+
+      if (req.validatedQuery.studyId) {
+        filter.studyId = req.validatedQuery.studyId;
+      }
+
+      if (req.validatedQuery.dueAtFrom || req.validatedQuery.dueAtTo) {
+        filter.dueAt = {};
+        if (req.validatedQuery.dueAtFrom) {
+          filter.dueAt.$gte = new Date(req.validatedQuery.dueAtFrom);
+        }
+        if (req.validatedQuery.dueAtTo) {
+          filter.dueAt.$lte = new Date(req.validatedQuery.dueAtTo);
+        }
+      }
+
+      if (req.user.role === 'staff') {
+        filter.assignee = req.user._id;
+      } else if (req.user.role === 'researcher') {
+        const studies = await Study.find({
+          orgId: req.user.orgId,
+          $or: [{ createdBy: req.user._id }, { assignedStaff: req.user._id }],
+        }).select('_id');
+        const studyIds = studies.map((study) => study._id);
+        if (req.validatedQuery.studyId) {
+          if (!studyIds.map(String).includes(req.validatedQuery.studyId)) {
+            return res.json({ tasks: [] });
+          }
+          filter.studyId = req.validatedQuery.studyId;
+        } else {
+          filter.studyId = { $in: studyIds };
+        }
+      }
+
+      const tasks = await Task.find(filter)
+        .populate('assignee', 'displayName email role category')
+        .populate('formId')
+        .populate('studyId');
+
+      res.json({ tasks });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+const submitSchema = z.object({
+  answers: z.record(z.any()),
+});
+
+router.post(
+  '/:taskId/submit',
+  auth,
+  requireRole('admin', 'researcher', 'staff'),
+  validateBody(submitSchema),
+  async (req, res, next) => {
+    try {
+      const task = await Task.findOne({
+        _id: req.params.taskId,
+        orgId: req.user.orgId,
+      });
+
+      await ensureTaskReadable(req.user, task);
+
+      const assigneeId = toIdString(task.assignee);
+      const userId = req.user._id.toString();
+
+      if (req.user.role === 'staff' && assigneeId !== userId) {
+        const error = new Error('Forbidden');
+        error.status = 403;
+        throw error;
+      }
+
+      if (req.user.role === 'researcher' && assigneeId !== userId) {
+        const studyId = toIdString(task.studyId);
+        if (studyId) {
+          const study = await Study.findOne({ _id: studyId, orgId: req.user.orgId });
+          const researcherHasAccess =
+            study &&
+            (toIdString(study.createdBy) === userId ||
+              study.assignedStaff.some((memberId) => toIdString(memberId) === userId));
+          if (!researcherHasAccess) {
+            const error = new Error('Forbidden');
+            error.status = 403;
+            throw error;
+          }
+        }
+      }
+
+      const form = await Form.findOne({ _id: task.formId, orgId: req.user.orgId });
+      if (!form) {
+        const error = new Error('Form not found');
+        error.status = 404;
+        throw error;
+      }
+
+      ensureAnswersSafe(req.validatedBody.answers);
+      ensureAnswersMatchSchema(req.validatedBody.answers, form.schema);
+
+      const response = await FormResponse.findOneAndUpdate(
+        { formId: form._id, pid: task.pid, orgId: req.user.orgId },
+        {
+          studyId: task.studyId,
+          orgId: req.user.orgId,
+          pid: task.pid,
+          answers: req.validatedBody.answers,
+          authoredBy: req.user._id,
+          authoredAt: new Date(),
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+
+      task.status = 'submitted';
+      await task.save();
+
+      await task.populate([
+        { path: 'assignee', select: 'displayName email role category' },
+        { path: 'formId' },
+        { path: 'studyId' },
+      ]);
+
+      res.json({ task, response });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.delete(
+  '/:taskId/response',
+  auth,
+  requireRole('admin', 'researcher', 'staff'),
+  async (req, res, next) => {
+    try {
+      const task = await Task.findOne({
+        _id: req.params.taskId,
+        orgId: req.user.orgId,
+      }).populate('studyId');
+
+      await ensureTaskWritable(req.user, task);
+
+      const response = await FormResponse.findOne({
+        formId: task.formId,
+        pid: task.pid,
+        orgId: req.user.orgId,
+      });
+
+      if (response) {
+        await response.deleteOne();
+      }
+
+      task.status = 'open';
+      await task.save();
+
+      res.json({ task });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+module.exports = router;
+
+
+===== FILE: server/src/routes/patients.routes.js =====
+const express = require('express');
+const mongoose = require('mongoose');
+const { z } = require('zod');
+const Patient = require('../models/Patient');
+const User = require('../models/User');
+const Task = require('../models/Task');
+const Study = require('../models/Study');
+const FormResponse = require('../models/FormResponse');
+const auth = require('../middleware/auth');
+const { requireRole } = require('../middleware/rbac');
+const { validateBody, validateQuery } = require('../utils/validate');
+
+const router = express.Router();
+
+const listQuerySchema = z.object({
+  cohortTags: z.string().optional(),
+  strata: z.string().optional(),
+  category: z.string().optional(),
+  text: z.string().optional(),
+});
+
+router.get(
+  '/',
+  auth,
+  requireRole('admin', 'researcher', 'staff'),
+  validateQuery(listQuerySchema),
+  async (req, res, next) => {
+    try {
+      const filter = {
+        orgId: req.user.orgId,
+      };
+
+      if (req.user.role === 'staff') {
+        filter.assignedStaff = req.user._id;
+      }
+
+      if (req.validatedQuery.cohortTags) {
+        filter.cohortTags = { $all: req.validatedQuery.cohortTags.split(',').map((tag) => tag.trim()) };
+      }
+      if (req.validatedQuery.strata) {
+        filter.strata = { $all: req.validatedQuery.strata.split(',').map((tag) => tag.trim()) };
+      }
+      if (req.validatedQuery.text) {
+        const term = req.validatedQuery.text.trim();
+        filter.pid = { $regex: term, $options: 'i' };
+      }
+      if (req.validatedQuery.category) {
+        filter.category = { $regex: req.validatedQuery.category.trim(), $options: 'i' };
+      }
+
+      const patients = await Patient.find(filter).populate('assignedStaff', 'displayName email role category');
+      res.json({ patients });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+const pseudoIdRegex = /^[A-Z0-9_-]{3,}$/;
+
+const createSchema = z.object({
+  pid: z.string().regex(pseudoIdRegex, 'PID must be pseudo identifier (uppercase, digits, _ or -)'),
+  category: z.string().max(120).optional(),
+  cohortTags: z.array(z.string()).optional(),
+  strata: z.array(z.string()).optional(),
+  status: z.enum(['active', 'inactive']).optional(),
+  assignedStaff: z.array(z.string()).optional(),
+});
+
+router.post(
+  '/',
+  auth,
+  requireRole('admin', 'researcher'),
+  validateBody(createSchema),
+  async (req, res, next) => {
+    try {
+      const pidValue = req.validatedBody.pid.trim().toUpperCase();
+
+      const existing = await Patient.findOne({ pid: pidValue, orgId: req.user.orgId });
+      if (existing) {
+        const error = new Error('PID already exists');
+        error.status = 409;
+        throw error;
+      }
+
+      const patient = await Patient.create({
+        pid: pidValue,
+        category: req.validatedBody.category,
+        cohortTags: req.validatedBody.cohortTags || [],
+        strata: req.validatedBody.strata || [],
+        status: req.validatedBody.status || 'active',
+        orgId: req.user.orgId,
+      });
+
+      if (req.validatedBody.assignedStaff?.length) {
+        const staff = await User.find({
+          _id: { $in: req.validatedBody.assignedStaff },
+          orgId: req.user.orgId,
+          role: { $in: ['staff', 'researcher'] },
+        });
+        patient.assignedStaff = staff.map((member) => member._id);
+        await patient.save();
+      }
+
+      const populated = await patient.populate('assignedStaff', 'displayName email role category');
+
+      res.status(201).json({ patient: populated });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+const updateSchema = z.object({
+  category: z.union([z.string().max(120), z.null()]).optional(),
+  cohortTags: z.array(z.string()).optional(),
+  strata: z.array(z.string()).optional(),
+  assignedStaff: z.array(z.string()).optional(),
+  status: z.enum(['active', 'inactive']).optional(),
+  newPid: z.string().regex(pseudoIdRegex, 'PID must be pseudo identifier (uppercase, digits, _ or -)').optional(),
+});
+
+router.patch(
+  '/:pid',
+  auth,
+  requireRole('admin', 'researcher'),
+  validateBody(updateSchema),
+  async (req, res, next) => {
+    try {
+      const patient = await Patient.findOne({ pid: req.params.pid, orgId: req.user.orgId });
+      if (!patient) {
+        const error = new Error('Patient not found');
+        error.status = 404;
+        throw error;
+      }
+
+      if (req.validatedBody.cohortTags) {
+        patient.cohortTags = req.validatedBody.cohortTags;
+      }
+      if (req.validatedBody.strata) {
+        patient.strata = req.validatedBody.strata;
+      }
+      if (Object.prototype.hasOwnProperty.call(req.validatedBody, 'category')) {
+        patient.category = req.validatedBody.category || undefined;
+      }
+      if (req.validatedBody.assignedStaff) {
+        const staff = await User.find({
+          _id: { $in: req.validatedBody.assignedStaff },
+          orgId: req.user.orgId,
+          role: { $in: ['staff', 'researcher'] },
+        });
+        patient.assignedStaff = staff.map((member) => member._id);
+      }
+      if (req.validatedBody.status) {
+        patient.status = req.validatedBody.status;
+      }
+      if (req.validatedBody.newPid) {
+        const nextPid = req.validatedBody.newPid.trim().toUpperCase();
+        if (nextPid !== patient.pid) {
+          const existing = await Patient.findOne({
+            pid: nextPid,
+            orgId: req.user.orgId,
+            _id: { $ne: patient._id },
+          });
+          if (existing) {
+            const error = new Error('PID already exists');
+            error.status = 409;
+            throw error;
+          }
+
+          const previousPid = patient.pid;
+          patient.pid = nextPid;
+
+          await Promise.all([
+            Task.updateMany({ pid: previousPid, orgId: req.user.orgId }, { $set: { pid: nextPid } }),
+            FormResponse.updateMany(
+              { pid: previousPid, orgId: req.user.orgId },
+              { $set: { pid: nextPid } }
+            ),
+            (async () => {
+              const studies = await Study.find({
+                orgId: req.user.orgId,
+                assignedPatients: previousPid,
+              });
+              await Promise.all(
+                studies.map(async (studyDoc) => {
+                  studyDoc.assignedPatients = studyDoc.assignedPatients.map((pid) =>
+                    pid === previousPid ? nextPid : pid
+                  );
+                  await studyDoc.save();
+                })
+              );
+            })(),
+          ]);
+        }
+      }
+
+      await patient.save();
+      const populated = await patient.populate('assignedStaff', 'displayName email role category');
+      res.json({ patient: populated });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+const assignSchema = z.object({
+  staffIds: z.array(z.string()).nonempty(),
+});
+
+router.post(
+  '/:pid/assign',
+  auth,
+  requireRole('admin', 'researcher'),
+  validateBody(assignSchema),
+  async (req, res, next) => {
+    try {
+      const patient = await Patient.findOne({ pid: req.params.pid, orgId: req.user.orgId });
+      if (!patient) {
+        const error = new Error('Patient not found');
+        error.status = 404;
+        throw error;
+      }
+
+      const staff = await User.find({
+        _id: { $in: req.validatedBody.staffIds },
+        orgId: req.user.orgId,
+        role: { $in: ['staff', 'researcher'] },
+      });
+
+      const assignedSet = new Set(patient.assignedStaff.map((id) => id.toString()));
+      staff.forEach((member) => assignedSet.add(member._id.toString()));
+      patient.assignedStaff = Array.from(assignedSet).map((id) => new mongoose.Types.ObjectId(id));
+      await patient.save();
+
+      const populated = await patient.populate('assignedStaff', 'displayName email role category');
+      res.json({ patient: populated });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get(
+  '/:pid/responses',
+  auth,
+  requireRole('admin', 'researcher', 'staff'),
+  async (req, res, next) => {
+    try {
+      const patient = await Patient.findOne({ pid: req.params.pid, orgId: req.user.orgId });
+      if (!patient) {
+        const error = new Error('Patient not found');
+        error.status = 404;
+        throw error;
+      }
+
+      if (
+        req.user.role === 'staff' &&
+        !patient.assignedStaff.some((id) => id.toString() === req.user._id.toString())
+      ) {
+        const error = new Error('Forbidden');
+        error.status = 403;
+        throw error;
+      }
+
+      const filter = {
+        pid: req.params.pid,
+        orgId: req.user.orgId,
+      };
+
+      if (req.user.role === 'researcher') {
+        const studies = await Study.find({
+          orgId: req.user.orgId,
+          $or: [{ createdBy: req.user._id }, { assignedStaff: req.user._id }],
+        }).select('_id');
+        filter.studyId = { $in: studies.map((study) => study._id) };
+      }
+
+      if (req.user.role === 'staff') {
+        const tasks = await Task.find({ pid: req.params.pid, assignee: req.user._id }).select('formId');
+        filter.formId = { $in: tasks.map((task) => task.formId) };
+      }
+
+      const responses = await FormResponse.find(filter).populate('formId');
+      res.json({ responses });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get(
+  '/:pid/tasks',
+  auth,
+  requireRole('admin', 'researcher', 'staff'),
+  async (req, res, next) => {
+    try {
+      const patient = await Patient.findOne({ pid: req.params.pid, orgId: req.user.orgId });
+      if (!patient) {
+        const error = new Error('Patient not found');
+        error.status = 404;
+        throw error;
+      }
+
+      if (
+        req.user.role === 'staff' &&
+        !patient.assignedStaff.some((id) => id.toString() === req.user._id.toString())
+      ) {
+        const error = new Error('Forbidden');
+        error.status = 403;
+        throw error;
+      }
+
+      const filter = {
+        pid: req.params.pid,
+        orgId: req.user.orgId,
+      };
+
+      if (req.user.role === 'staff') {
+        filter.assignee = req.user._id;
+      } else if (req.user.role === 'researcher') {
+        const studies = await Study.find({
+          orgId: req.user.orgId,
+          $or: [{ createdBy: req.user._id }, { assignedStaff: req.user._id }],
+        }).select('_id');
+        filter.studyId = { $in: studies.map((study) => study._id) };
+      }
+
+      const tasks = await Task.find(filter).populate('formId').populate('assignee', 'displayName role');
+      res.json({ tasks });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+module.exports = router;
+
+
+===== FILE: server/src/models/User.js =====
+const { Schema, model } = require('mongoose');
+
+const refreshTokenSchema = new Schema(
+  {
+    tokenId: { type: String, required: true },      // tid in JWT
+    tokenHash: { type: String, required: true },    // argon2 hash of refresh token
+    createdAt: { type: Date, default: Date.now },
+    expiresAt: { type: Date },                      // from JWT exp
+  },
+  { _id: false }
+);
+
+const userSchema = new Schema(
+  {
+    email: {
+      type: String,
+      required: [true, 'Email is required.'],
+      unique: true,
+      lowercase: true,
+      trim: true,
+      index: true,
+    },
+    passwordHash: {
+      type: String,
+      required: [true, 'Password hash is required.'],
+    },
+    displayName: {
+      type: String,
+      required: [true, 'Display name is required.'],
+      trim: true,
+    },
+    role: {
+      type: String,
+      enum: ['superadmin', 'admin', 'researcher', 'staff'],
+      default: 'researcher',
+      index: true,
+    },
+    category: {
+      type: String,
+      maxlength: 120,
+      trim: true,
+    },
+    orgId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Organization',
+      index: true,
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
+      index: true,
+    },
+    // Persist refresh tokens (required by utils/jwt.js create/verify/revoke)
+    refreshTokens: {
+      type: [refreshTokenSchema],
+      default: [],
+    },
+  },
+  {
+    timestamps: true,
+  }
+);
+
+const User = model('User', userSchema);
+
+module.exports = User;
+
+
+===== FILE: server/src/models/Organization.js =====
+const mongoose = require('mongoose');
+
+const organizationSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true },
+    country: { type: String, required: true },
+    contactEmail: { type: String, required: true },
+    message: { type: String },
+    status: {
+      type: String,
+      enum: ['pending', 'approved', 'rejected', 'suspended'],
+      default: 'pending',
+    },
+    isActive: { type: Boolean, default: true },
+  },
+  { timestamps: true }
+);
+
+module.exports = mongoose.model('Organization', organizationSchema);

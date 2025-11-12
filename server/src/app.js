@@ -5,6 +5,7 @@ const cookieParser = require('cookie-parser');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const mongoSanitize = require('express-mongo-sanitize');
+const jwt = require('jsonwebtoken');
 const config = require('./config/env');
 const authRoutes = require('./routes/auth.routes');
 const orgRoutes = require('./routes/org.routes');
@@ -63,12 +64,21 @@ const globalLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// More generous in dev and per-user where possible
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 10,
+  max: process.env.NODE_ENV === 'production' ? 30 : 300,
   standardHeaders: true,
   legacyHeaders: false,
-  message: 'Too many attempts, please try again later.',
+  keyGenerator: (req) => {
+    const rt = req.body && req.body.refreshToken;
+    try {
+      const sub = jwt.decode(rt)?.sub;
+      return sub || req.ip;
+    } catch {
+      return req.ip;
+    }
+  },
 });
 
 if (config.nodeEnv !== 'test') {
