@@ -16,17 +16,19 @@ const statusOptions = [
 ];
 
 const getUserKey = (user) => user.id || user._id || user.email;
-
 const normalizeId = (value) => (value ? value.toString() : '');
 
-const UserTable = ({
+export default function UserTable({
   users,
   teams = [],
   onSaveUser,
   onDeleteUser,
+  onResetPassword,     // NEW
+  currentUserId,       // NEW
   savingUserId,
   deletingUserId,
-}) => {
+  resettingUserId,     // NEW
+}) {
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState(null);
 
@@ -68,8 +70,8 @@ const UserTable = ({
     try {
       await onSaveUser(user, payload);
       cancelEdit();
-    } catch (error) {
-      // Keep editing so the admin can adjust and retry
+    } catch {
+      // keep editing
     }
   };
 
@@ -77,8 +79,8 @@ const UserTable = ({
     if (!onDeleteUser) return;
     try {
       await onDeleteUser(user);
-    } catch (error) {
-      // Ignore delete errors here; parent surfaces feedback
+    } catch {
+      // parent surfaces feedback
     }
   };
 
@@ -87,6 +89,11 @@ const UserTable = ({
 
   const savingId = normalizeId(savingUserId);
   const deletingId = normalizeId(deletingUserId);
+  const resettingId = normalizeId(resettingUserId);
+  const isSelf = (u) => {
+    const rowId = normalizeId(u.id || u._id);
+    return currentUserId && normalizeId(currentUserId) === rowId;
+  };
 
   return (
     <table className={styles.table}>
@@ -108,6 +115,7 @@ const UserTable = ({
           const rowDraft = isEditing ? draft : null;
           const saving = savingId && savingId === rowId;
           const deleting = deletingId && deletingId === rowId;
+          const resetting = resettingId && resettingId === rowId;
 
           return (
             <tr key={userKey} className={isEditing ? styles.editingRow : undefined}>
@@ -195,7 +203,7 @@ const UserTable = ({
                     <Button
                       size="sm"
                       onClick={() => handleSave(user)}
-                      disabled={saving || deleting || isSaveDisabled(rowDraft)}
+                      disabled={saving || deleting || resetting || isSaveDisabled(rowDraft)}
                     >
                       {saving ? 'Saving…' : 'Save'}
                     </Button>
@@ -204,7 +212,7 @@ const UserTable = ({
                       size="sm"
                       variant="ghost"
                       onClick={cancelEdit}
-                      disabled={saving || deleting}
+                      disabled={saving || deleting || resetting}
                     >
                       Cancel
                     </Button>
@@ -214,15 +222,36 @@ const UserTable = ({
                       variant="ghost"
                       className={styles.deleteButton}
                       onClick={() => handleDelete(user)}
-                      disabled={deleting || saving}
+                      disabled={deleting || saving || resetting}
                     >
                       {deleting ? 'Removing…' : 'Delete'}
                     </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => onResetPassword && onResetPassword(user)}
+                      disabled={resetting || saving || deleting || isSelf(user)}
+                      title={
+                        isSelf(user)
+                          ? 'Change your own password from the Account page'
+                          : 'Generate a new password'
+                      }
+                    >
+                      {resetting ? 'Generating…' : 'New password'}
+                    </Button>
                   </div>
                 ) : (
-                  <Button size="sm" variant="secondary" onClick={() => startEdit(user)}>
-                    Edit
-                  </Button>
+                  <div className={styles.actionGroup}>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => startEdit(user)}
+                      disabled={saving || deleting || resetting}
+                    >
+                      Edit
+                    </Button>
+                  </div>
                 )}
               </td>
             </tr>
@@ -231,6 +260,4 @@ const UserTable = ({
       </tbody>
     </table>
   );
-};
-
-export default UserTable;
+}

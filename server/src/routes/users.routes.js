@@ -2,12 +2,16 @@ const express = require('express');
 const { z } = require('zod');
 const crypto = require('crypto');
 const argon2 = require('argon2');
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const auth = require('../middleware/auth');
 const { requireRole } = require('../middleware/rbac');
 const { validateBody, validateQuery } = require('../utils/validate');
+const { revokeAllRefreshTokens } = require('../utils/jwt');
 
 const router = express.Router();
+
+/* ---------------- list ---------------- */
 
 const listQuerySchema = z.object({
   role: z.enum(['admin', 'researcher', 'staff']).optional(),
@@ -65,11 +69,14 @@ router.get(
   }
 );
 
+/* ---------------- create ---------------- */
+
 const createSchema = z.object({
   email: z.string().email(),
-  role: z.enum(['researcher', 'staff']),
+  role: z.enum(['researcher', 'staff', 'admin']).default('researcher'),
   displayName: z.string().min(2),
   category: z.string().max(120).optional(),
+  password: z.string().min(8, 'Password must be at least 8 characters').optional(),
 });
 
 router.post(
@@ -79,12 +86,9 @@ router.post(
   validateBody(createSchema),
   async (req, res, next) => {
     try {
-      if (req.user.role === 'superadmin') {
-        const error = new Error('Super admins must specify an organization to create users.');
-        error.status = 400;
-        throw error;
-      }
-      const { email, role, displayName } = req.validatedBody;
+      // org scoping: admins must belong to an org; superadmin can also create (any org not auto-assigned)
+      const { email, role, displayName, category, password } = req.validatedBody;
+
       const existing = await User.findOne({ email: email.toLowerCase() });
       if (existing) {
         const error = new Error('Email already in use');
@@ -92,24 +96,31 @@ router.post(
         throw error;
       }
 
-      const tempPassword = crypto.randomBytes(6).toString('base64url');
-      const passwordHash = await argon2.hash(tempPassword);
+      let tempPassword = null;
+      const finalPassword =
+        typeof password === 'string' && password.trim().length >= 8
+          ? password.trim()
+          : (tempPassword = generateTempPassword());
 
-      const user = await User.create({
+      const passwordHash = await argon2.hash(finalPassword);
+
+      const doc = {
         email: email.toLowerCase(),
         role,
         displayName,
-        category: req.validatedBody.category,
+        category,
         passwordHash,
-        orgId: req.user.orgId,
         isActive: true,
-      });
+      };
+
+      if (req.user.role !== 'superadmin') {
+        doc.orgId = req.user.orgId;
+      }
+
+      const user = await User.create(doc);
 
       // eslint-disable-next-line no-console
-      console.log('[invite:user]', {
-        email: user.email,
-        tempPassword,
-      });
+      console.log('[invite:user]', { email: user.email, tempPassword: tempPassword || '(custom set)' });
 
       res.status(201).json({
         user: {
@@ -120,13 +131,84 @@ router.post(
           isActive: user.isActive,
           category: user.category,
         },
-        tempPassword: process.env.NODE_ENV === 'production' ? undefined : tempPassword,
+        tempPassword:
+          tempPassword && process.env.NODE_ENV !== 'production' ? tempPassword : undefined,
       });
     } catch (error) {
       next(error);
     }
   }
 );
+
+function generateTempPassword() {
+  // 14 chars, mixed classes, no ambiguous Base64 symbols
+  const raw = crypto.randomBytes(12).toString('base64').replace(/[+/=]/g, '');
+  const sets = [
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+    'abcdefghijklmnopqrstuvwxyz',
+    '0123456789',
+    '!@#$%^&*()-_=+[]{}:,<.>/?',
+  ];
+  const picks = sets.map((set) => set[Math.floor(Math.random() * set.length)]).join('');
+  return (raw + picks).split('').sort(() => Math.random() - 0.5).join('').slice(0, 14);
+}
+
+/* ---------------- reset password ---------------- */
+
+router.post(
+  '/:id/reset-password',
+  auth,
+  requireRole('admin'), // admin or superadmin
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+
+      if (!mongoose.isValidObjectId(id)) {
+        const e = new Error('Invalid user id');
+        e.status = 400;
+        throw e;
+      }
+
+      // scope: admins → same org; superadmin → any
+      const finder =
+        req.user.role === 'superadmin'
+          ? { _id: id }
+          : { _id: id, orgId: req.user.orgId };
+
+      const target = await User.findOne(finder);
+      if (!target) {
+        const e = new Error('User not found');
+        e.status = 404;
+        throw e;
+      }
+
+      // avoid self-lock
+      if (String(target._id) === String(req.user._id)) {
+        const e = new Error('Use your Account page to change your own password.');
+        e.status = 400;
+        throw e;
+      }
+
+      const tempPassword = generateTempPassword();
+      target.passwordHash = await argon2.hash(tempPassword);
+      await revokeAllRefreshTokens(target); // invalidate sessions
+      await target.save();
+
+      // eslint-disable-next-line no-console
+      console.log('[reset:user-password]', { email: target.email });
+
+      return res.json({
+        ok: true,
+        user: { id: target._id, email: target.email },
+        tempPassword: process.env.NODE_ENV !== 'production' ? tempPassword : undefined,
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
+
+/* ---------------- update ---------------- */
 
 const updateSchema = z.object({
   role: z.enum(['researcher', 'staff', 'admin']).optional(),
@@ -143,13 +225,14 @@ router.patch(
   validateBody(updateSchema),
   async (req, res, next) => {
     try {
-      if (req.user.role === 'superadmin') {
-        const error = new Error('Super admins must manage admins through the dedicated endpoints.');
-        error.status = 400;
-        throw error;
-      }
       const { id } = req.params;
-      const user = await User.findOne({ _id: id, orgId: req.user.orgId });
+
+      const finder =
+        req.user.role === 'superadmin'
+          ? { _id: id }
+          : { _id: id, orgId: req.user.orgId };
+
+      const user = await User.findOne(finder);
       if (!user) {
         const error = new Error('User not found');
         error.status = 404;
@@ -183,8 +266,8 @@ router.patch(
         if (nextEmail !== user.email) {
           const existing = await User.findOne({
             email: nextEmail,
-            orgId: req.user.orgId,
             _id: { $ne: user._id },
+            ...(req.user.role === 'superadmin' ? {} : { orgId: req.user.orgId }),
           });
           if (existing) {
             const error = new Error('Email already in use');
@@ -212,19 +295,21 @@ router.patch(
   }
 );
 
+/* ---------------- delete ---------------- */
+
 router.delete(
   '/:id',
   auth,
   requireRole('admin'),
   async (req, res, next) => {
     try {
-      if (req.user.role === 'superadmin') {
-        const error = new Error('Super admins must manage admins through the dedicated endpoints.');
-        error.status = 400;
-        throw error;
-      }
       const { id } = req.params;
-      const user = await User.findOne({ _id: id, orgId: req.user.orgId });
+      const finder =
+        req.user.role === 'superadmin'
+          ? { _id: id }
+          : { _id: id, orgId: req.user.orgId };
+
+      const user = await User.findOne(finder);
       if (!user) {
         const error = new Error('User not found');
         error.status = 404;
@@ -237,8 +322,7 @@ router.delete(
         throw error;
       }
 
-      await User.deleteOne({ _id: id, orgId: req.user.orgId });
-
+      await User.deleteOne(finder);
       res.status(204).send();
     } catch (error) {
       next(error);

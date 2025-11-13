@@ -12,6 +12,8 @@ const { validateBody, validateQuery } = require('../utils/validate');
 
 const router = express.Router();
 
+/* ---------------------------------- list ---------------------------------- */
+
 const listQuerySchema = z.object({
   cohortTags: z.string().optional(),
   strata: z.string().optional(),
@@ -26,19 +28,21 @@ router.get(
   validateQuery(listQuerySchema),
   async (req, res, next) => {
     try {
-      const filter = {
-        orgId: req.user.orgId,
-      };
+      const filter = { orgId: req.user.orgId };
 
       if (req.user.role === 'staff') {
         filter.assignedStaff = req.user._id;
       }
 
       if (req.validatedQuery.cohortTags) {
-        filter.cohortTags = { $all: req.validatedQuery.cohortTags.split(',').map((tag) => tag.trim()) };
+        filter.cohortTags = {
+          $all: req.validatedQuery.cohortTags.split(',').map((t) => t.trim()),
+        };
       }
       if (req.validatedQuery.strata) {
-        filter.strata = { $all: req.validatedQuery.strata.split(',').map((tag) => tag.trim()) };
+        filter.strata = {
+          $all: req.validatedQuery.strata.split(',').map((t) => t.trim()),
+        };
       }
       if (req.validatedQuery.text) {
         const term = req.validatedQuery.text.trim();
@@ -48,7 +52,10 @@ router.get(
         filter.category = { $regex: req.validatedQuery.category.trim(), $options: 'i' };
       }
 
-      const patients = await Patient.find(filter).populate('assignedStaff', 'displayName email role category');
+      const patients = await Patient.find(filter).populate(
+        'assignedStaff',
+        'displayName email role category'
+      );
       res.json({ patients });
     } catch (error) {
       next(error);
@@ -56,15 +63,25 @@ router.get(
   }
 );
 
+/* --------------------------------- create --------------------------------- */
+
+const objectIdRegex = /^[a-f\d]{24}$/i;
 const pseudoIdRegex = /^[A-Z0-9_-]{3,}$/;
 
 const createSchema = z.object({
-  pid: z.string().regex(pseudoIdRegex, 'PID must be pseudo identifier (uppercase, digits, _ or -)'),
+  pid: z.string().regex(
+    pseudoIdRegex,
+    'PID must be uppercase letters, digits, _ or -, length ≥ 3'
+  ),
   category: z.string().max(120).optional(),
   cohortTags: z.array(z.string()).optional(),
   strata: z.array(z.string()).optional(),
+  // Accept both "isActive" (preferred) and legacy "status"
+  isActive: z.boolean().optional(),
   status: z.enum(['active', 'inactive']).optional(),
-  assignedStaff: z.array(z.string()).optional(),
+  // Accept either single ownerId or an array of assignedStaff
+  ownerId: z.string().regex(objectIdRegex, 'Invalid ownerId').optional(),
+  assignedStaff: z.array(z.string().regex(objectIdRegex, 'Invalid staff id')).optional(),
 });
 
 router.post(
@@ -83,41 +100,73 @@ router.post(
         throw error;
       }
 
+      // normalize activity flag
+      const isActive =
+        typeof req.validatedBody.isActive === 'boolean'
+          ? req.validatedBody.isActive
+          : req.validatedBody.status
+          ? req.validatedBody.status === 'active'
+          : true;
+
+      // collect potential staff ids (ownerId + assignedStaff)
+      const candidateIds = new Set();
+      if (req.validatedBody.ownerId) candidateIds.add(req.validatedBody.ownerId);
+      (req.validatedBody.assignedStaff || []).forEach((id) => candidateIds.add(id));
+
+      // fetch only valid staff/researchers from same org
+      let cleanedAssignees = [];
+      if (candidateIds.size > 0) {
+        const ids = Array.from(candidateIds).filter((id) => objectIdRegex.test(id));
+        if (ids.length > 0) {
+          const staff = await User.find({
+            _id: { $in: ids },
+            orgId: req.user.orgId,
+            role: { $in: ['staff', 'researcher'] },
+          }).select('_id');
+          cleanedAssignees = staff.map((m) => m._id);
+        }
+      }
+
       const patient = await Patient.create({
         pid: pidValue,
         category: req.validatedBody.category,
         cohortTags: req.validatedBody.cohortTags || [],
         strata: req.validatedBody.strata || [],
-        status: req.validatedBody.status || 'active',
+        isActive,
         orgId: req.user.orgId,
+        assignedStaff: cleanedAssignees,
       });
 
-      if (req.validatedBody.assignedStaff?.length) {
-        const staff = await User.find({
-          _id: { $in: req.validatedBody.assignedStaff },
-          orgId: req.user.orgId,
-          role: { $in: ['staff', 'researcher'] },
-        });
-        patient.assignedStaff = staff.map((member) => member._id);
-        await patient.save();
-      }
-
-      const populated = await patient.populate('assignedStaff', 'displayName email role category');
+      const populated = await patient.populate(
+        'assignedStaff',
+        'displayName email role category'
+      );
 
       res.status(201).json({ patient: populated });
     } catch (error) {
+      // Provide detail so the client sees why it failed
+      if (error?.name === 'ValidationError') {
+        error.status = 400;
+        error.code = 'validation_error';
+      }
       next(error);
     }
   }
 );
 
+/* --------------------------------- update --------------------------------- */
+
 const updateSchema = z.object({
   category: z.union([z.string().max(120), z.null()]).optional(),
   cohortTags: z.array(z.string()).optional(),
   strata: z.array(z.string()).optional(),
-  assignedStaff: z.array(z.string()).optional(),
+  assignedStaff: z.array(z.string().regex(objectIdRegex, 'Invalid staff id')).optional(),
+  isActive: z.boolean().optional(),
   status: z.enum(['active', 'inactive']).optional(),
-  newPid: z.string().regex(pseudoIdRegex, 'PID must be pseudo identifier (uppercase, digits, _ or -)').optional(),
+  newPid: z
+    .string()
+    .regex(pseudoIdRegex, 'PID must be uppercase letters, digits, _ or -, length ≥ 3')
+    .optional(),
 });
 
 router.patch(
@@ -148,21 +197,25 @@ router.patch(
           _id: { $in: req.validatedBody.assignedStaff },
           orgId: req.user.orgId,
           role: { $in: ['staff', 'researcher'] },
-        });
-        patient.assignedStaff = staff.map((member) => member._id);
+        }).select('_id');
+        patient.assignedStaff = staff.map((m) => m._id);
       }
-      if (req.validatedBody.status) {
-        patient.status = req.validatedBody.status;
+
+      if (Object.prototype.hasOwnProperty.call(req.validatedBody, 'isActive')) {
+        patient.isActive = !!req.validatedBody.isActive;
+      } else if (req.validatedBody.status) {
+        patient.isActive = req.validatedBody.status === 'active';
       }
+
       if (req.validatedBody.newPid) {
         const nextPid = req.validatedBody.newPid.trim().toUpperCase();
         if (nextPid !== patient.pid) {
-          const existing = await Patient.findOne({
+          const exists = await Patient.findOne({
             pid: nextPid,
             orgId: req.user.orgId,
             _id: { $ne: patient._id },
           });
-          if (existing) {
+          if (exists) {
             const error = new Error('PID already exists');
             error.status = 409;
             throw error;
@@ -172,7 +225,10 @@ router.patch(
           patient.pid = nextPid;
 
           await Promise.all([
-            Task.updateMany({ pid: previousPid, orgId: req.user.orgId }, { $set: { pid: nextPid } }),
+            Task.updateMany(
+              { pid: previousPid, orgId: req.user.orgId },
+              { $set: { pid: nextPid } }
+            ),
             FormResponse.updateMany(
               { pid: previousPid, orgId: req.user.orgId },
               { $set: { pid: nextPid } }
@@ -184,8 +240,8 @@ router.patch(
               });
               await Promise.all(
                 studies.map(async (studyDoc) => {
-                  studyDoc.assignedPatients = studyDoc.assignedPatients.map((pid) =>
-                    pid === previousPid ? nextPid : pid
+                  studyDoc.assignedPatients = studyDoc.assignedPatients.map((p) =>
+                    p === previousPid ? nextPid : p
                   );
                   await studyDoc.save();
                 })
@@ -196,16 +252,25 @@ router.patch(
       }
 
       await patient.save();
-      const populated = await patient.populate('assignedStaff', 'displayName email role category');
+      const populated = await patient.populate(
+        'assignedStaff',
+        'displayName email role category'
+      );
       res.json({ patient: populated });
     } catch (error) {
+      if (error?.name === 'ValidationError') {
+        error.status = 400;
+        error.code = 'validation_error';
+      }
       next(error);
     }
   }
 );
 
+/* -------------------------------- assign ---------------------------------- */
+
 const assignSchema = z.object({
-  staffIds: z.array(z.string()).nonempty(),
+  staffIds: z.array(z.string().regex(objectIdRegex, 'Invalid staff id')).nonempty(),
 });
 
 router.post(
@@ -226,20 +291,29 @@ router.post(
         _id: { $in: req.validatedBody.staffIds },
         orgId: req.user.orgId,
         role: { $in: ['staff', 'researcher'] },
-      });
+      }).select('_id');
 
       const assignedSet = new Set(patient.assignedStaff.map((id) => id.toString()));
-      staff.forEach((member) => assignedSet.add(member._id.toString()));
+      staff.forEach((m) => assignedSet.add(m._id.toString()));
       patient.assignedStaff = Array.from(assignedSet).map((id) => new mongoose.Types.ObjectId(id));
       await patient.save();
 
-      const populated = await patient.populate('assignedStaff', 'displayName email role category');
+      const populated = await patient.populate(
+        'assignedStaff',
+        'displayName email role category'
+      );
       res.json({ patient: populated });
     } catch (error) {
+      if (error?.name === 'ValidationError') {
+        error.status = 400;
+        error.code = 'validation_error';
+      }
       next(error);
     }
   }
 );
+
+/* ------------------------------ responses list ----------------------------- */
 
 router.get(
   '/:pid/responses',
@@ -263,22 +337,21 @@ router.get(
         throw error;
       }
 
-      const filter = {
-        pid: req.params.pid,
-        orgId: req.user.orgId,
-      };
+      const filter = { pid: req.params.pid, orgId: req.user.orgId };
 
       if (req.user.role === 'researcher') {
         const studies = await Study.find({
           orgId: req.user.orgId,
           $or: [{ createdBy: req.user._id }, { assignedStaff: req.user._id }],
         }).select('_id');
-        filter.studyId = { $in: studies.map((study) => study._id) };
+        filter.studyId = { $in: studies.map((s) => s._id) };
       }
 
       if (req.user.role === 'staff') {
-        const tasks = await Task.find({ pid: req.params.pid, assignee: req.user._id }).select('formId');
-        filter.formId = { $in: tasks.map((task) => task.formId) };
+        const tasks = await Task.find({ pid: req.params.pid, assignee: req.user._id }).select(
+          'formId'
+        );
+        filter.formId = { $in: tasks.map((t) => t.formId) };
       }
 
       const responses = await FormResponse.find(filter).populate('formId');
@@ -288,6 +361,8 @@ router.get(
     }
   }
 );
+
+/* ---------------------------------- tasks --------------------------------- */
 
 router.get(
   '/:pid/tasks',
@@ -311,10 +386,7 @@ router.get(
         throw error;
       }
 
-      const filter = {
-        pid: req.params.pid,
-        orgId: req.user.orgId,
-      };
+      const filter = { pid: req.params.pid, orgId: req.user.orgId };
 
       if (req.user.role === 'staff') {
         filter.assignee = req.user._id;
@@ -323,10 +395,12 @@ router.get(
           orgId: req.user.orgId,
           $or: [{ createdBy: req.user._id }, { assignedStaff: req.user._id }],
         }).select('_id');
-        filter.studyId = { $in: studies.map((study) => study._id) };
+        filter.studyId = { $in: studies.map((s) => s._id) };
       }
 
-      const tasks = await Task.find(filter).populate('formId').populate('assignee', 'displayName role');
+      const tasks = await Task.find(filter)
+        .populate('formId')
+        .populate('assignee', 'displayName role');
       res.json({ tasks });
     } catch (error) {
       next(error);

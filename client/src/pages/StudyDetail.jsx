@@ -8,6 +8,7 @@ import { Button } from '../components/ui/Button';
 import { Input, Textarea } from '../components/ui/Input';
 import { Badge } from '../components/ui/Badge';
 import FormBuilder from '../components/FormBuilder';
+import AssignModal from '../components/AssignModal';
 import styles from '../styles/StudyDetailPage.module.css';
 
 const statusOptions = [
@@ -44,6 +45,9 @@ const StudyDetail = () => {
   const [patientSelection, setPatientSelection] = useState(() => new Set());
 
   const [formViewer, setFormViewer] = useState(null);
+
+  // NEW: assign modal for a specific form
+  const [showAssign, setShowAssign] = useState(false);
 
   const studiesQuery = useQuery({
     queryKey: ['studies'],
@@ -144,6 +148,15 @@ const StudyDetail = () => {
     },
   });
 
+  // NEW: assign tasks for a form
+  const assignMutation = useMutation({
+    mutationFn: ({ formId, payload }) => apiClient.post(`/api/forms/${formId}/assign`, payload),
+    onSuccess: () => {
+      setShowAssign(false);
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+    },
+  });
+
   const deleteStudyMutation = useMutation({
     mutationFn: () => apiClient.delete(`/api/studies/${studyId}`),
     onSuccess: () => {
@@ -239,6 +252,12 @@ const StudyDetail = () => {
     });
   }, [owners, study]);
 
+  // Staff-only list for assignments (server assigns to staff)
+  const staffCandidates = useMemo(
+    () => allOwners.filter((u) => u.role === 'staff'),
+    [allOwners]
+  );
+
   const enrolledPatients = useMemo(() => {
     if (!study?.assignedPatients?.length || !patients.length) return [];
     return patients.filter((patient) => study.assignedPatients.includes(patient.pid));
@@ -281,49 +300,65 @@ const StudyDetail = () => {
     deleteStudyMutation.mutate();
   };
 
+  // ---- CSV helpers (aligned with Patient modal export) ----
+  const escapeCsv = (val) => {
+    if (val == null) return '';
+    const s = String(val);
+    if (/["\n,]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  };
+
+  const downloadBlob = (content, filename) => {
+    const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Export responses with same schema as Patient modal:
+  // pid, study_code, study_title, form, authored_at, ...dynamic answer keys
   const handleExportResponses = () => {
-    if (!responses.length || !study) return;
-    const headers = ['Study', 'Form', 'Patient', 'Submitted At', 'Submitted By', 'Answers'];
-    const rows = responses.map((response) => {
-      const formTitle =
-        response.formId?.schema?.title || response.formId?.version || 'Form';
-      const submittedAt = response.authoredAt || response.createdAt;
-      const submittedBy =
-        response.authoredBy?.displayName || response.authoredBy?.email || '';
-      const answersText = JSON.stringify(response.answers ?? {});
-      return [
-        study.code || study.title,
+    if (!responses.length || !study) {
+      downloadBlob('', `${(study?.code || study?.title || 'study').replace(/\s+/g, '-').toLowerCase()}-responses.csv`);
+      return;
+    }
+
+    // Collect dynamic answer keys across all responses
+    const keySet = new Set();
+    responses.forEach((r) => Object.keys(r.answers || {}).forEach((k) => keySet.add(k)));
+    const answerKeys = Array.from(keySet).sort();
+
+    const staticHeaders = ['pid', 'study_code', 'study_title', 'form', 'authored_at'];
+    const header = [...staticHeaders, ...answerKeys].map(escapeCsv).join(',');
+
+    const rows = responses.map((r) => {
+      const formTitle = r.formId?.schema?.title || r.formId?.version || '';
+      const authoredAt = r.authoredAt ? new Date(r.authoredAt).toISOString() : '';
+      const base = [
+        r.pid,
+        study.code || '',
+        study.title || '',
         formTitle,
-        response.pid,
-        submittedAt ? new Date(submittedAt).toISOString() : '',
-        submittedBy,
-        answersText,
+        authoredAt,
       ];
+      const ans = r.answers || {};
+      const dynamic = answerKeys.map((k) => {
+        const v = ans[k];
+        if (Array.isArray(v)) return escapeCsv(v.join('; '));
+        if (v && typeof v === 'object') return escapeCsv(JSON.stringify(v));
+        return escapeCsv(v);
+      });
+      return [...base.map(escapeCsv), ...dynamic].join(',');
     });
 
-    const csvLines = [headers, ...rows]
-      .map((row) =>
-        row
-          .map((cell) => {
-            const value = cell == null ? '' : String(cell);
-            return `"${value.replace(/"/g, '""')}"`;
-          })
-          .join(',')
-      )
-      .join('\n');
-
-    const blob = new Blob([csvLines], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute(
-      'download',
-      `${(study.code || study.title || 'study').replace(/\s+/g, '-').toLowerCase()}-responses.csv`
-    );
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    const csv = [header, ...rows].join('\n');
+    const baseName = (study.code || study.title || 'study').replace(/\s+/g, '-').toLowerCase();
+    downloadBlob(csv, `${baseName}-responses.csv`);
   };
 
   const handleUpdateMeta = () => {
@@ -366,11 +401,8 @@ const StudyDetail = () => {
     const normalizedId = ownerId.toString();
     setOwnerSelection((previousOwners) => {
       const nextOwners = new Set(previousOwners);
-      if (checked) {
-        nextOwners.add(normalizedId);
-      } else {
-        nextOwners.delete(normalizedId);
-      }
+      if (checked) nextOwners.add(normalizedId);
+      else nextOwners.delete(normalizedId);
 
       setPatientSelection((previousPatients) => {
         const nextPatients = new Set(previousPatients);
@@ -380,12 +412,10 @@ const StudyDetail = () => {
         } else {
           patientsForOwner.forEach((pid) => {
             const ownersForPatient = patientOwnersMap.get(pid) || new Set();
-            const stillSelected = Array.from(ownersForPatient).some((otherOwnerId) =>
-              otherOwnerId !== normalizedId && nextOwners.has(otherOwnerId)
+            const stillSelected = Array.from(ownersForPatient).some(
+              (otherOwnerId) => otherOwnerId !== normalizedId && nextOwners.has(otherOwnerId)
             );
-            if (!stillSelected) {
-              nextPatients.delete(pid);
-            }
+            if (!stillSelected) nextPatients.delete(pid);
           });
         }
         return nextPatients;
@@ -398,11 +428,8 @@ const StudyDetail = () => {
   const handlePatientToggle = (pid, checked) => {
     setPatientSelection((previousPatients) => {
       const nextPatients = new Set(previousPatients);
-      if (checked) {
-        nextPatients.add(pid);
-      } else {
-        nextPatients.delete(pid);
-      }
+      if (checked) nextPatients.add(pid);
+      else nextPatients.delete(pid);
       return nextPatients;
     });
   };
@@ -414,20 +441,14 @@ const StudyDetail = () => {
         assignedPatients: Array.from(patientSelection),
       });
       setShowAssignmentModal(false);
-    } catch (error) {
-      // leave modal open; error surfaced via mutation handling
+    } catch {
+      // errors surfaced by mutation
     }
   };
 
-  const openFormViewer = (form) => {
-    setFormViewer({ form, mode: 'preview' });
-  };
-
+  const openFormViewer = (form) => setFormViewer({ form, mode: 'preview' });
   const closeFormViewer = () => setFormViewer(null);
-
-  const setFormViewerMode = (mode) => {
-    setFormViewer((prev) => (prev ? { ...prev, mode } : prev));
-  };
+  const setFormViewerMode = (mode) => setFormViewer((prev) => (prev ? { ...prev, mode } : prev));
 
   const formResponsesForActive = useMemo(() => {
     if (!formViewer?.form) return [];
@@ -437,13 +458,8 @@ const StudyDetail = () => {
     });
   }, [formViewer, responses]);
 
-  if (!studyId) {
-    return null;
-  }
-
-  if (studiesQuery.isLoading) {
-    return <div className={styles.loading}>Loading study…</div>;
-  }
+  if (!studyId) return null;
+  if (studiesQuery.isLoading) return <div className={styles.loading}>Loading study…</div>;
 
   if (!study) {
     return (
@@ -455,6 +471,12 @@ const StudyDetail = () => {
       </div>
     );
   }
+
+  // helper to satisfy server zod(datetime) for dueAt when user picked only a date
+  const normalizeAssignPayload = (payload) => ({
+    ...payload,
+    dueAt: payload.dueAt ? new Date(`${payload.dueAt}T00:00:00Z`).toISOString() : undefined,
+  });
 
   return (
     <div className={styles.page}>
@@ -539,29 +561,25 @@ const StudyDetail = () => {
             <CardDescription>Build questionnaires that staff complete as part of this protocol.</CardDescription>
           </CardHeader>
           <CardContent>
-              {formsQuery.isLoading ? (
-                <div className={styles.emptyState}>Loading forms…</div>
-              ) : forms.length === 0 ? (
-                <div className={styles.emptyState}>No forms yet. Create the baseline questionnaire to begin.</div>
-              ) : (
-                <div className={styles.formsList}>
-                  {forms.map((form) => (
-                    <div key={form._id} className={styles.formRow}>
-                      <div>
-                        <h4>{form.schema?.title || form.version}</h4>
-                        <p>{form.schema?.items?.length || 0} questions · Deadline {form.version || '—'}</p>
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => openFormViewer(form)}
-                      >
-                        Details
-                      </Button>
+            {formsQuery.isLoading ? (
+              <div className={styles.emptyState}>Loading forms…</div>
+            ) : forms.length === 0 ? (
+              <div className={styles.emptyState}>No forms yet. Create the baseline questionnaire to begin.</div>
+            ) : (
+              <div className={styles.formsList}>
+                {forms.map((form) => (
+                  <div key={form._id} className={styles.formRow}>
+                    <div>
+                      <h4>{form.schema?.title || form.version}</h4>
+                      <p>{form.schema?.items?.length || 0} questions · Deadline {form.version || '—'}</p>
                     </div>
-                  ))}
-                </div>
-              )}
+                    <Button variant="outline" size="sm" onClick={() => openFormViewer(form)}>
+                      Details
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
             {canEdit ? (
               <Button className={styles.createButton} variant="secondary" onClick={() => setShowBuilder(true)}>
                 Create form
@@ -666,11 +684,7 @@ const StudyDetail = () => {
                 >
                   <label>
                     Title
-                    <Input
-                      value={updatedTitle}
-                      onChange={(event) => setUpdatedTitle(event.target.value)}
-                      required
-                    />
+                    <Input value={updatedTitle} onChange={(event) => setUpdatedTitle(event.target.value)} required />
                   </label>
                   <label>
                     Description
@@ -682,10 +696,7 @@ const StudyDetail = () => {
                   </label>
                   <label>
                     Status
-                    <select
-                      value={updatedStatus}
-                      onChange={(event) => setUpdatedStatus(event.target.value)}
-                    >
+                    <select value={updatedStatus} onChange={(event) => setUpdatedStatus(event.target.value)}>
                       {statusOptions.map((option) => (
                         <option key={option.value} value={option.value}>
                           {option.label}
@@ -719,11 +730,7 @@ const StudyDetail = () => {
               <CardContent className={styles.assignmentModal}>
                 <div className={styles.assignmentColumn}>
                   <div className={styles.assignmentHeading}>Owners</div>
-                  <Input
-                    value={ownerSearch}
-                    onChange={(event) => setOwnerSearch(event.target.value)}
-                    placeholder="Search owners"
-                  />
+                  <Input value={ownerSearch} onChange={(event) => setOwnerSearch(event.target.value)} placeholder="Search owners" />
                   <div className={styles.selectionList}>
                     {allOwners.length ? (
                       allOwners
@@ -754,11 +761,7 @@ const StudyDetail = () => {
                 </div>
                 <div className={styles.assignmentColumn}>
                   <div className={styles.assignmentHeading}>Patients</div>
-                  <Input
-                    value={patientSearch}
-                    onChange={(event) => setPatientSearch(event.target.value)}
-                    placeholder="Search patients"
-                  />
+                  <Input value={patientSearch} onChange={(event) => setPatientSearch(event.target.value)} placeholder="Search patients" />
                   <div className={styles.selectionList}>
                     {activePatients.length ? (
                       activePatients
@@ -793,11 +796,7 @@ const StudyDetail = () => {
                 <Button type="button" variant="ghost" onClick={() => setShowAssignmentModal(false)}>
                   Cancel
                 </Button>
-                <Button
-                  type="button"
-                  onClick={handleAssignmentSave}
-                  disabled={updateStudyMutation.isLoading}
-                >
+                <Button type="button" onClick={handleAssignmentSave} disabled={updateStudyMutation.isLoading}>
                   Save changes
                 </Button>
               </CardContent>
@@ -813,15 +812,25 @@ const StudyDetail = () => {
               <CardHeader
                 actions={
                   canEdit ? (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() =>
-                        setFormViewerMode(formViewer.mode === 'edit' ? 'preview' : 'edit')
-                      }
-                    >
-                      {formViewer.mode === 'edit' ? 'Done editing' : 'Edit form'}
-                    </Button>
+                    <div className={styles.headerActionGroup}>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          setFormViewerMode(formViewer.mode === 'edit' ? 'preview' : 'edit')
+                        }
+                      >
+                        {formViewer.mode === 'edit' ? 'Done editing' : 'Edit form'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setShowAssign(true)}
+                        disabled={!enrolledPatients.length || !staffCandidates.length}
+                      >
+                        Assign form
+                      </Button>
+                    </div>
                   ) : null
                 }
               >
@@ -897,9 +906,7 @@ const StudyDetail = () => {
                                 <td className={styles.mono}>{response.pid}</td>
                                 <td>{formatDateTime(response.authoredAt || response.createdAt)}</td>
                                 <td>
-                                  {response.authoredBy?.displayName ||
-                                    response.authoredBy?.email ||
-                                    '—'}
+                                  {response.authoredBy?.displayName || response.authoredBy?.email || '—'}
                                 </td>
                                 <td>
                                   <div className={styles.answersPreview}>
@@ -907,9 +914,7 @@ const StudyDetail = () => {
                                       entries.map(([key, value]) => (
                                         <div key={key} className={styles.answerRow}>
                                           <span className={styles.answerKey}>{key}</span>
-                                          <span className={styles.answerValue}>
-                                            {formatAnswerValue(value)}
-                                          </span>
+                                          <span className={styles.answerValue}>{formatAnswerValue(value)}</span>
                                         </div>
                                       ))
                                     ) : (
@@ -948,6 +953,20 @@ const StudyDetail = () => {
             </Card>
           </div>
         </div>
+      ) : null}
+
+      {showAssign && formViewer?.form ? (
+        <AssignModal
+          patients={enrolledPatients}
+          staff={staffCandidates}
+          onAssign={(payload) =>
+            assignMutation.mutate({
+              formId: formViewer.form._id,
+              payload: normalizeAssignPayload(payload),
+            })
+          }
+          onClose={() => setShowAssign(false)}
+        />
       ) : null}
     </div>
   );

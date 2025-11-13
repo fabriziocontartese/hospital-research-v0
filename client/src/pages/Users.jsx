@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../lib/apiClient';
+import { useAuth } from '../lib/auth';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -13,6 +14,20 @@ const roleLabels = {
   staff: 'Staff',
 };
 
+/* ---------- simple password strength heuristic ---------- */
+const scorePassword = (pwd) => {
+  if (!pwd) return 0;
+  let score = 0;
+  if (pwd.length >= 8) score += 1;
+  if (pwd.length >= 12) score += 1;
+  if (/[a-z]/.test(pwd)) score += 1;
+  if (/[A-Z]/.test(pwd)) score += 1;
+  if (/\d/.test(pwd)) score += 1;
+  if (/[^A-Za-z0-9]/.test(pwd)) score += 1;
+  return Math.min(score, 6);
+};
+const strengthLabel = (s) => (s <= 2 ? 'Weak' : s <= 4 ? 'Good' : 'Strong');
+
 const Users = () => {
   const [roleFilter, setRoleFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -24,6 +39,16 @@ const Users = () => {
   const [showTeamsModal, setShowTeamsModal] = useState(false);
   const [teamDraft, setTeamDraft] = useState('');
   const [teamModalMessage, setTeamModalMessage] = useState('');
+
+  // invite form local state
+  const [setPassword, setSetPassword] = useState(false);
+  const [pwd1, setPwd1] = useState('');
+  const [pwd2, setPwd2] = useState('');
+  const [inviteError, setInviteError] = useState('');
+
+  const { user: currentUser } = useAuth();
+  const currentUserId = currentUser?.id || currentUser?._id || null;
+
   const queryClient = useQueryClient();
 
   const usersQuery = useQuery({
@@ -47,9 +72,13 @@ const Users = () => {
           : 'User created.'
       );
       setShowInvite(false);
+      setInviteError('');
+      setSetPassword(false);
+      setPwd1('');
+      setPwd2('');
     },
     onError: (err) => {
-      setFeedback(err.response?.data?.error || 'Unable to create user.');
+      setInviteError(err.response?.data?.error || 'Unable to create user.');
     },
   });
 
@@ -61,6 +90,22 @@ const Users = () => {
     },
     onError: (err) => {
       setFeedback(err.response?.data?.error || 'Unable to update user.');
+    },
+  });
+
+  // Use mutate (not mutateAsync) to avoid unhandled promise rejections in onClick
+  const resetPasswordMutation = useMutation({
+    mutationFn: (id) => apiClient.post(`/api/users/${id}/reset-password`).then((r) => r.data),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      setFeedback(
+        data?.tempPassword
+          ? `Password reset for ${data.user.email}. New password: ${data.tempPassword}`
+          : `Password reset for ${data.user.email}.`
+      );
+    },
+    onError: (err) => {
+      setFeedback(err.response?.data?.error || 'Unable to reset password.');
     },
   });
 
@@ -126,11 +171,15 @@ const Users = () => {
     return deleteMutation.mutateAsync(userId);
   };
 
+  const handleResetPassword = (user) => {
+    const userId = user.id || user._id;
+    if (!userId) return;
+    resetPasswordMutation.mutate(userId);
+  };
+
   useEffect(() => {
     setTeams((previous) => {
-      const normalized = new Map(
-        previous.map((team) => [team.toLowerCase(), team])
-      );
+      const normalized = new Map(previous.map((team) => [team.toLowerCase(), team]));
 
       users.forEach((userItem) => {
         const value = (userItem.category || '').trim();
@@ -198,13 +247,30 @@ const Users = () => {
 
   const handleInvite = (event) => {
     event.preventDefault();
+    setInviteError('');
     const form = new FormData(event.currentTarget);
-    inviteMutation.mutate({
+    const basePayload = {
       email: form.get('email'),
       displayName: form.get('displayName'),
       role: form.get('role'),
       category: form.get('category') || undefined,
-    });
+    };
+
+    if (setPassword) {
+      const p1 = pwd1.trim();
+      const p2 = pwd2.trim();
+      if (p1.length < 8) {
+        setInviteError('Password must be at least 8 characters.');
+        return;
+      }
+      if (p1 !== p2) {
+        setInviteError('Passwords do not match.');
+        return;
+      }
+      inviteMutation.mutate({ ...basePayload, password: p1 });
+    } else {
+      inviteMutation.mutate(basePayload);
+    }
   };
 
   return (
@@ -214,7 +280,7 @@ const Users = () => {
           <h1>Team directory</h1>
           <p>Invite new researchers and staff, or adjust their permissions and teams.</p>
         </div>
-        <Button onClick={() => setShowInvite(true)}>Invite user</Button>
+        <Button onClick={() => setShowInvite(true)}>New user</Button>
       </div>
 
       <section className={styles.summaryGrid}>
@@ -302,8 +368,13 @@ const Users = () => {
               teams={teams}
               onSaveUser={handleSaveUser}
               onDeleteUser={handleDeleteUser}
+              onResetPassword={handleResetPassword}
+              currentUserId={currentUserId} // NEW
               savingUserId={updateMutation.isLoading ? updateMutation.variables?.id : null}
               deletingUserId={deleteMutation.isLoading ? deleteMutation.variables : null}
+              resettingUserId={
+                resetPasswordMutation.isLoading ? resetPasswordMutation.variables : null
+              }
             />
           )}
         </CardContent>
@@ -389,7 +460,9 @@ const Users = () => {
             <Card>
               <CardHeader>
                 <CardTitle>Invite new user</CardTitle>
-                <CardDescription>Send an invitation email with a temporary password.</CardDescription>
+                <CardDescription>
+                  Either set a password now or leave blank to auto-generate a temporary one.
+                </CardDescription>
               </CardHeader>
               <CardContent>
                 <form className={styles.modalForm} onSubmit={handleInvite}>
@@ -410,14 +483,80 @@ const Users = () => {
                     <select name="role" defaultValue="researcher">
                       <option value="researcher">Researcher</option>
                       <option value="staff">Staff</option>
+                      <option value="admin">Admin</option>
                     </select>
                   </label>
+
+                  <div className={styles.hr} />
+
+                  <label className={styles.checkboxRow}>
+                    <input
+                      type="checkbox"
+                      checked={setPassword}
+                      onChange={(e) => {
+                        setSetPassword(e.target.checked);
+                        setInviteError('');
+                        if (!e.target.checked) {
+                          setPwd1('');
+                          setPwd2('');
+                        }
+                      }}
+                    />
+                    <span>Set password now</span>
+                  </label>
+
+                  {setPassword ? (
+                    <>
+                      <label>
+                        Password
+                        <Input
+                          type="password"
+                          value={pwd1}
+                          onChange={(e) => setPwd1(e.target.value)}
+                          placeholder="At least 8 characters"
+                          required={setPassword}
+                        />
+                      </label>
+                      <div className={styles.passwordMeter}>
+                        <div className={styles.passwordHint}>
+                          Strength: {strengthLabel(scorePassword(pwd1))}
+                        </div>
+                      </div>
+                      <label>
+                        Confirm password
+                        <Input
+                          type="password"
+                          value={pwd2}
+                          onChange={(e) => setPwd2(e.target.value)}
+                          placeholder="Re-enter password"
+                          required={setPassword}
+                        />
+                      </label>
+                    </>
+                  ) : (
+                    <div className={styles.helpText}>
+                      No password entered: a temporary password will be generated and shown after creation.
+                    </div>
+                  )}
+
+                  {inviteError ? <div className={styles.errorBanner}>{inviteError}</div> : null}
+
                   <div className={styles.modalActions}>
-                    <Button type="button" variant="ghost" onClick={() => setShowInvite(false)}>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => {
+                        setShowInvite(false);
+                        setInviteError('');
+                        setSetPassword(false);
+                        setPwd1('');
+                        setPwd2('');
+                      }}
+                    >
                       Cancel
                     </Button>
                     <Button type="submit" disabled={inviteMutation.isLoading}>
-                      {inviteMutation.isLoading ? 'Sending…' : 'Send invite'}
+                      {inviteMutation.isLoading ? 'Creating…' : 'Create user'}
                     </Button>
                   </div>
                 </form>

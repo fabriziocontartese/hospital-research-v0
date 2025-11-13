@@ -12,7 +12,8 @@ const { validateBody } = require('../utils/validate');
 
 const router = express.Router();
 
-const sanitizeAllowedVariables = (items = []) => [...new Set(items.map((item) => item.trim()).filter(Boolean))];
+const sanitizeAllowedVariables = (items = []) =>
+  [...new Set(items.map((item) => item.trim()).filter(Boolean))];
 
 router.get(
   '/',
@@ -21,10 +22,11 @@ router.get(
   async (req, res, next) => {
     try {
       const query = scopeStudyAccess(req.user, {});
+      // INCLUDE assignedPatients so client can show enrolled count
       const projection =
         req.user.role === 'admin'
           ? undefined
-          : 'code title status description assignedStaff';
+          : 'code title status description assignedStaff assignedPatients';
       const studies = await Study.find(query, projection).populate(
         'assignedStaff',
         'displayName email role category'
@@ -59,7 +61,10 @@ router.post(
   validateBody(createSchema),
   async (req, res, next) => {
     try {
-      const existing = await Study.findOne({ code: req.validatedBody.code, orgId: req.user.orgId });
+      const existing = await Study.findOne({
+        code: req.validatedBody.code,
+        orgId: req.user.orgId,
+      });
       if (existing) {
         const error = new Error('Study code already exists');
         error.status = 409;
@@ -79,19 +84,28 @@ router.post(
         code: req.validatedBody.code,
         title: req.validatedBody.title,
         description: req.validatedBody.description,
-        allowedVariables: sanitizeAllowedVariables(req.validatedBody.allowedVariables),
+        allowedVariables: sanitizeAllowedVariables(
+          req.validatedBody.allowedVariables
+        ),
         assignedStaff: assignedStaffIds,
         notifications: req.validatedBody.notifications || [],
         orgId: req.user.orgId,
         createdBy: req.user._id,
       });
 
-      if (!assignedStaffIds.some((id) => id.toString() === req.user._id.toString())) {
+      if (
+        !assignedStaffIds.some(
+          (id) => id.toString() === req.user._id.toString()
+        )
+      ) {
         study.assignedStaff.push(req.user._id);
         await study.save();
       }
 
-      const populated = await study.populate('assignedStaff', 'displayName email role category');
+      const populated = await study.populate(
+        'assignedStaff',
+        'displayName email role category'
+      );
       res.status(201).json({ study: populated });
     } catch (error) {
       next(error);
@@ -103,7 +117,9 @@ const ensureWritable = (user, study) => {
   if (user.role === 'admin') return;
   const canEdit =
     study.createdBy?.toString() === user._id.toString() ||
-    study.assignedStaff.some((memberId) => memberId.toString() === user._id.toString());
+    study.assignedStaff.some(
+      (memberId) => memberId.toString() === user._id.toString()
+    );
   if (!canEdit) {
     const err = new Error('Forbidden');
     err.status = 403;
@@ -152,7 +168,12 @@ router.patch(
       if (req.validatedBody.status) {
         study.status = req.validatedBody.status;
       }
-      if (Object.prototype.hasOwnProperty.call(req.validatedBody, 'description')) {
+      if (
+        Object.prototype.hasOwnProperty.call(
+          req.validatedBody,
+          'description'
+        )
+      ) {
         study.description = req.validatedBody.description;
       }
       if (req.validatedBody.notifications) {
@@ -174,7 +195,10 @@ router.patch(
       }
 
       await study.save();
-      const populated = await study.populate('assignedStaff', 'displayName email role category');
+      const populated = await study.populate(
+        'assignedStaff',
+        'displayName email role category'
+      );
       res.json({ study: populated });
     } catch (error) {
       next(error);
@@ -300,7 +324,11 @@ router.patch(
 
       ensureWritable(req.user, study);
 
-      const form = await Form.findOne({ _id: formId, studyId: study._id, orgId: req.user.orgId });
+      const form = await Form.findOne({
+        _id: formId,
+        studyId: study._id,
+        orgId: req.user.orgId,
+      });
       if (!form) {
         const error = new Error('Form not found');
         error.status = 404;

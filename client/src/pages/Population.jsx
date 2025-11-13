@@ -5,17 +5,19 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import PopulationTable from '../components/PopulationTable';
+import PatientModal from '../components/PatientModal';
 import { useAuth } from '../lib/auth';
 import styles from '../styles/PopulationPage.module.css';
 
 const Population = () => {
-  const { user } = useAuth();
-  const canEdit = user.role !== 'staff';
+  const { user: currentUser } = useAuth();
+  const canEdit = currentUser.role !== 'staff';
   const queryClient = useQueryClient();
   const [filters, setFilters] = useState({ text: '', category: '' });
   const [includeInactive, setIncludeInactive] = useState(false);
   const [sortOption, setSortOption] = useState('pid');
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [viewPid, setViewPid] = useState(null);
   const [createForm, setCreateForm] = useState({ pid: '', category: '', ownerId: '' });
   const [message, setMessage] = useState('');
   const [categories, setCategories] = useState([]);
@@ -31,10 +33,13 @@ const Population = () => {
     },
   });
 
+  // Fetch only staff when the viewer is a researcher (backend already restricts researchers to staff).
+  // Admins see all; we still filter on the client.
   const ownersQuery = useQuery({
-    queryKey: ['populationOwners'],
+    queryKey: ['populationOwners', currentUser.role],
     queryFn: async () => {
-      const response = await apiClient.get('/api/users');
+      const params = currentUser.role === 'researcher' ? { role: 'staff' } : undefined;
+      const response = await apiClient.get('/api/users', { params });
       return response.data.users;
     },
     enabled: canEdit,
@@ -65,16 +70,45 @@ const Population = () => {
   });
 
   const patients = useMemo(() => patientsQuery.data ?? [], [patientsQuery.data]);
+
+  // Build owners list:
+  // - Admins: staff + researchers from API.
+  // - Researchers: staff from API + ensure the current researcher is included as a selectable owner.
   const owners = useMemo(() => {
-    const list = ownersQuery.data ?? [];
-    return list
-      .filter((user) => ['staff', 'researcher'].includes(user.role))
-      .sort((a, b) => {
-        const aLabel = (a.displayName || a.email).toLowerCase();
-        const bLabel = (b.displayName || b.email).toLowerCase();
-        return aLabel.localeCompare(bLabel);
-      });
-  }, [ownersQuery.data]);
+    const apiList = ownersQuery.data ?? [];
+    const base = apiList.filter((u) => ['staff', 'researcher'].includes(u.role));
+
+    if (currentUser.role === 'researcher') {
+      const selfId = currentUser.id || currentUser._id;
+      const alreadyHasSelf = base.some((u) => (u._id || u.id)?.toString() === String(selfId));
+      if (!alreadyHasSelf) {
+        base.push({
+          _id: selfId,
+          email: currentUser.email,
+          displayName: currentUser.displayName || currentUser.email,
+          role: 'researcher',
+        });
+      }
+    }
+
+    // dedupe by _id/id and sort by label
+    const seen = new Set();
+    const deduped = [];
+    for (const u of base) {
+      const key = String(u._id || u.id || u.email);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(u);
+    }
+
+    deduped.sort((a, b) => {
+      const aLabel = (a.displayName || a.email || '').toLowerCase();
+      const bLabel = (b.displayName || b.email || '').toLowerCase();
+      return aLabel.localeCompare(bLabel);
+    });
+
+    return deduped;
+  }, [ownersQuery.data, currentUser]);
 
   useEffect(() => {
     setCategories((previous) => {
@@ -180,6 +214,10 @@ const Population = () => {
       pid: patient.pid,
       payload: draft,
     });
+    await queryClient.invalidateQueries({ queryKey: ['patients'] });
+    if (viewPid) {
+      await queryClient.invalidateQueries({ queryKey: ['patientResponses', viewPid] });
+    }
   };
 
   const handleCategoryAdd = (value) => {
@@ -255,12 +293,10 @@ const Population = () => {
               setShowCreateModal(true);
             }}
           >
-            Register patient
+            New patient
           </Button>
         ) : (
-          <div className={styles.readOnlyNote}>
-            View-only access
-          </div>
+          <div className={styles.readOnlyNote}>View-only access</div>
         )}
       </header>
 
@@ -314,10 +350,7 @@ const Population = () => {
             </label>
             <label className={styles.filterItem}>
               <span>Sort by</span>
-              <select
-                value={sortOption}
-                onChange={(event) => setSortOption(event.target.value)}
-              >
+              <select value={sortOption} onChange={(event) => setSortOption(event.target.value)}>
                 <option value="pid">PID</option>
                 <option value="owner">Owner</option>
                 <option value="category">Category</option>
@@ -353,6 +386,10 @@ const Population = () => {
               savingPid={savingPid}
               categories={categories}
               readOnly={!canEdit}
+              onViewPatient={(pid) => {
+                setMessage('');
+                setViewPid(pid);
+              }}
             />
           )}
         </CardContent>
@@ -378,7 +415,7 @@ const Population = () => {
                           pid: event.target.value.toUpperCase(),
                         }))
                       }
-                      placeholder="PID-2025-001"
+                      placeholder="min. 3 characters, e.g. PID-001"
                       required
                     />
                   </label>
@@ -421,7 +458,7 @@ const Population = () => {
                     >
                       <option value="">Unassigned</option>
                       {owners.map((owner) => (
-                        <option key={owner._id} value={owner._id}>
+                        <option key={owner._id || owner.id} value={owner._id || owner.id}>
                           {owner.displayName || owner.email} ({owner.role})
                         </option>
                       ))}
@@ -502,6 +539,18 @@ const Population = () => {
             </Card>
           </div>
         </div>
+      ) : null}
+
+      {viewPid ? (
+        <PatientModal
+          pid={viewPid}
+          patient={patients.find((p) => p.pid === viewPid)}
+          owners={owners}
+          categories={categories}
+          canEdit={canEdit}
+          onSavePatient={canEdit ? handleSavePatient : undefined}
+          onClose={() => setViewPid(null)}
+        />
       ) : null}
     </div>
   );

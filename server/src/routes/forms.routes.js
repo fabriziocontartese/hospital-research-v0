@@ -38,9 +38,7 @@ const ensureFormReadAccess = async (user, form) => {
   }
 
   if (user.role === 'admin' || user.role === 'researcher') {
-    if (!form.studyId) {
-      return form;
-    }
+    if (!form.studyId) return form;
     const study = await Study.findById(form.studyId);
     if (!study) {
       const error = new Error('Study not found');
@@ -80,9 +78,11 @@ router.get(
   }
 );
 
+// Allow assigning to staff OR researchers.
+// If no assignee provided, auto-assign to all owners of the patient with role in ['staff','researcher'].
 const assignSchema = z.object({
   pid: z.array(z.string()).nonempty(),
-  assignee: z.string().optional(),
+  assignee: z.string().optional(),          // may be staff or researcher
   dueAt: z.string().datetime().optional(),
 });
 
@@ -117,14 +117,15 @@ router.post(
         ensureStudyWrite(req.user, study);
       }
 
-      let assigneeUser = null;
+      let explicitAssignee = null;
       if (req.validatedBody.assignee) {
-        assigneeUser = await User.findOne({
+        explicitAssignee = await User.findOne({
           _id: req.validatedBody.assignee,
           orgId: req.user.orgId,
-          role: 'staff',
+          role: { $in: ['staff', 'researcher'] }, // CHANGED: allow researchers
+          isActive: { $ne: false },
         });
-        if (!assigneeUser) {
+        if (!explicitAssignee) {
           const error = new Error('Assignee not found');
           error.status = 404;
           throw error;
@@ -150,32 +151,40 @@ router.post(
           throw error;
         }
 
-        const assignees =
-          assigneeUser?.role === 'staff'
-            ? [assigneeUser]
-            : patient.assignedStaff?.length
-              ? await User.find({ _id: { $in: patient.assignedStaff }, role: 'staff' })
-              : [];
+        // Build assignees:
+        // - If explicit provided, use it.
+        // - Else, load owners attached to the patient (staff or researchers).
+        let assignees = [];
+        if (explicitAssignee) {
+          assignees = [explicitAssignee];
+        } else if (Array.isArray(patient.assignedStaff) && patient.assignedStaff.length) {
+          // eslint-disable-next-line no-await-in-loop
+          assignees = await User.find({
+            _id: { $in: patient.assignedStaff },
+            orgId: req.user.orgId,
+            role: { $in: ['staff', 'researcher'] }, // CHANGED: allow both
+            isActive: { $ne: false },
+          });
+        }
 
         if (!assignees.length) {
-          const error = new Error(`No staff assignment for patient ${pid}`);
+          const error = new Error(`No owner (staff/researcher) assignment for patient ${pid}`);
           error.status = 400;
           throw error;
         }
 
+        // Create tasks per assignee, avoid duplicates within org
         // eslint-disable-next-line no-restricted-syntax
-        for (const staffMember of assignees) {
+        for (const user of assignees) {
           // eslint-disable-next-line no-await-in-loop
           const existing = await Task.findOne({
+            orgId: req.user.orgId,               // CHANGED: include org
             formId: form._id,
             pid,
-            assignee: staffMember._id,
+            assignee: user._id,
             status: 'open',
           });
-          if (existing) {
-            // eslint-disable-next-line no-continue
-            continue;
-          }
+          if (existing) continue;
 
           // eslint-disable-next-line no-await-in-loop
           const task = await Task.create({
@@ -183,7 +192,7 @@ router.post(
             studyId: form.studyId,
             orgId: req.user.orgId,
             pid,
-            assignee: staffMember._id,
+            assignee: user._id,
             dueAt: dueAtDate,
             status: 'open',
           });
@@ -220,7 +229,7 @@ router.post(
         ensureStudyWrite(req.user, study);
       }
 
-      const openTasks = await Task.find({ formId: form._id, status: 'open' });
+      const openTasks = await Task.find({ formId: form._id, orgId: req.user.orgId, status: 'open' }); // include org
       const assignees = [...new Set(openTasks.map((task) => task.assignee.toString()))];
       if (!assignees.length) {
         return res.json({ notified: [] });
