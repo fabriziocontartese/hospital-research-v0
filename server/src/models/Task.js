@@ -14,6 +14,13 @@ const taskSchema = new mongoose.Schema(
   { timestamps: false }
 );
 
+// lookups
 taskSchema.index({ assignee: 1, status: 1 });
+
+// idempotency: one task per assignee × form × patient × study × org
+taskSchema.index(
+  { orgId: 1, studyId: 1, formId: 1, pid: 1, assignee: 1 },
+  { unique: true, name: 'uniq_task_assignment' }
+);
 
 module.exports = mongoose.model('Task', taskSchema);

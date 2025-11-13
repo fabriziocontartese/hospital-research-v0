@@ -15,6 +15,55 @@ const router = express.Router();
 const sanitizeAllowedVariables = (items = []) =>
   [...new Set(items.map((item) => item.trim()).filter(Boolean))];
 
+/* ------------------------ TASK BACKFILL HELPERS ------------------------ */
+async function backfillTasksForStudyForm({ study, form, orgId }) {
+  if (!study?.assignedPatients?.length) return;
+
+  // assignees = study.assignedStaff ∪ { createdBy }
+  const assigneesSet = new Set(
+    (study.assignedStaff || []).map(String).concat(String(study.createdBy))
+  );
+  const assignees = Array.from(assigneesSet);
+
+  const ops = [];
+  for (const pid of study.assignedPatients) {
+    for (const assignee of assignees) {
+      ops.push({
+        updateOne: {
+          filter: { orgId, studyId: study._id, formId: form._id, pid, assignee },
+          update: {
+            $setOnInsert: {
+              orgId,
+              studyId: study._id,
+              formId: form._id,
+              pid,
+              assignee,
+              status: 'open',
+              createdAt: new Date(),
+            },
+          },
+          upsert: true,
+        },
+      });
+    }
+  }
+  if (ops.length) {
+    try {
+      await Task.bulkWrite(ops, { ordered: false });
+    } catch (e) {
+      if (e && e.code !== 11000) throw e; // ignore dup key races
+    }
+  }
+}
+
+async function backfillTasksForStudy({ study, orgId }) {
+  const forms = await Form.find({ studyId: study._id, orgId });
+  for (const form of forms) {
+    await backfillTasksForStudyForm({ study, form, orgId });
+  }
+}
+/* ---------------------------------------------------------------------- */
+
 router.get(
   '/',
   auth,
@@ -22,7 +71,6 @@ router.get(
   async (req, res, next) => {
     try {
       const query = scopeStudyAccess(req.user, {});
-      // INCLUDE assignedPatients so client can show enrolled count
       const projection =
         req.user.role === 'admin'
           ? undefined
@@ -84,28 +132,19 @@ router.post(
         code: req.validatedBody.code,
         title: req.validatedBody.title,
         description: req.validatedBody.description,
-        allowedVariables: sanitizeAllowedVariables(
-          req.validatedBody.allowedVariables
-        ),
+        allowedVariables: sanitizeAllowedVariables(req.validatedBody.allowedVariables),
         assignedStaff: assignedStaffIds,
         notifications: req.validatedBody.notifications || [],
         orgId: req.user.orgId,
         createdBy: req.user._id,
       });
 
-      if (
-        !assignedStaffIds.some(
-          (id) => id.toString() === req.user._id.toString()
-        )
-      ) {
+      if (!assignedStaffIds.some((id) => id.toString() === req.user._id.toString())) {
         study.assignedStaff.push(req.user._id);
         await study.save();
       }
 
-      const populated = await study.populate(
-        'assignedStaff',
-        'displayName email role category'
-      );
+      const populated = await study.populate('assignedStaff', 'displayName email role category');
       res.status(201).json({ study: populated });
     } catch (error) {
       next(error);
@@ -117,9 +156,7 @@ const ensureWritable = (user, study) => {
   if (user.role === 'admin') return;
   const canEdit =
     study.createdBy?.toString() === user._id.toString() ||
-    study.assignedStaff.some(
-      (memberId) => memberId.toString() === user._id.toString()
-    );
+    study.assignedStaff.some((memberId) => memberId.toString() === user._id.toString());
   if (!canEdit) {
     const err = new Error('Forbidden');
     err.status = 403;
@@ -162,23 +199,13 @@ router.patch(
 
       ensureWritable(req.user, study);
 
-      if (req.validatedBody.title) {
-        study.title = req.validatedBody.title;
-      }
-      if (req.validatedBody.status) {
-        study.status = req.validatedBody.status;
-      }
-      if (
-        Object.prototype.hasOwnProperty.call(
-          req.validatedBody,
-          'description'
-        )
-      ) {
+      if (req.validatedBody.title) study.title = req.validatedBody.title;
+      if (req.validatedBody.status) study.status = req.validatedBody.status;
+      if (Object.prototype.hasOwnProperty.call(req.validatedBody, 'description')) {
         study.description = req.validatedBody.description;
       }
-      if (req.validatedBody.notifications) {
-        study.notifications = req.validatedBody.notifications;
-      }
+      if (req.validatedBody.notifications) study.notifications = req.validatedBody.notifications;
+
       if (req.validatedBody.assignedStaff) {
         const staff = await User.find({
           _id: { $in: req.validatedBody.assignedStaff },
@@ -186,6 +213,7 @@ router.patch(
         });
         study.assignedStaff = staff.map((member) => member._id);
       }
+
       if (req.validatedBody.assignedPatients) {
         const patients = await Patient.find({
           pid: { $in: req.validatedBody.assignedPatients },
@@ -195,10 +223,16 @@ router.patch(
       }
 
       await study.save();
-      const populated = await study.populate(
-        'assignedStaff',
-        'displayName email role category'
-      );
+
+      // Backfill tasks when assignments change or new patients are added
+      if (
+        Object.prototype.hasOwnProperty.call(req.validatedBody, 'assignedPatients') ||
+        Object.prototype.hasOwnProperty.call(req.validatedBody, 'assignedStaff')
+      ) {
+        await backfillTasksForStudy({ study, orgId: req.user.orgId });
+      }
+
+      const populated = await study.populate('assignedStaff', 'displayName email role category');
       res.json({ study: populated });
     } catch (error) {
       next(error);
@@ -295,9 +329,9 @@ router.post(
         createdBy: req.user._id,
       });
 
-      if (kind === 'base' && study) {
-        study.baseFormId = form._id;
-        await study.save();
+      // Auto-assign: create tasks for all enrolled patients and all study assignees
+      if (study && kind === 'study') {
+        await backfillTasksForStudyForm({ study, form, orgId: req.user.orgId });
       }
 
       res.status(201).json({ form });

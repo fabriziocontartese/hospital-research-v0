@@ -8,7 +8,6 @@ import { Button } from '../components/ui/Button';
 import { Input, Textarea } from '../components/ui/Input';
 import { Badge } from '../components/ui/Badge';
 import FormBuilder from '../components/FormBuilder';
-import AssignModal from '../components/AssignModal';
 import styles from '../styles/StudyDetailPage.module.css';
 
 const statusOptions = [
@@ -46,9 +45,6 @@ const StudyDetail = () => {
 
   const [formViewer, setFormViewer] = useState(null);
 
-  // NEW: assign modal for a specific form
-  const [showAssign, setShowAssign] = useState(false);
-
   const studiesQuery = useQuery({
     queryKey: ['studies'],
     queryFn: async () => {
@@ -71,6 +67,7 @@ const StudyDetail = () => {
     enabled: Boolean(studyId),
   });
 
+  // Avoid 403 for staff: only non-staff query users list
   const ownersQuery = useQuery({
     queryKey: ['users', 'study-owners'],
     queryFn: async () => {
@@ -86,6 +83,9 @@ const StudyDetail = () => {
       });
       return Array.from(merged.values()).filter((userItem) => userItem.isActive !== false);
     },
+    enabled: user?.role !== 'staff',
+    retry: false,
+    refetchOnWindowFocus: false,
   });
 
   const patientsQuery = useQuery({
@@ -145,15 +145,6 @@ const StudyDetail = () => {
             }
           : prev
       );
-    },
-  });
-
-  // NEW: assign tasks for a form
-  const assignMutation = useMutation({
-    mutationFn: ({ formId, payload }) => apiClient.post(`/api/forms/${formId}/assign`, payload),
-    onSuccess: () => {
-      setShowAssign(false);
-      queryClient.invalidateQueries({ queryKey: ['tasks'] });
     },
   });
 
@@ -252,12 +243,6 @@ const StudyDetail = () => {
     });
   }, [owners, study]);
 
-  // Staff-only list for assignments (server assigns to staff)
-  const staffCandidates = useMemo(
-    () => allOwners.filter((u) => u.role === 'staff'),
-    [allOwners]
-  );
-
   const enrolledPatients = useMemo(() => {
     if (!study?.assignedPatients?.length || !patients.length) return [];
     return patients.filter((patient) => study.assignedPatients.includes(patient.pid));
@@ -320,15 +305,12 @@ const StudyDetail = () => {
     URL.revokeObjectURL(url);
   };
 
-  // Export responses with same schema as Patient modal:
-  // pid, study_code, study_title, form, authored_at, ...dynamic answer keys
   const handleExportResponses = () => {
     if (!responses.length || !study) {
       downloadBlob('', `${(study?.code || study?.title || 'study').replace(/\s+/g, '-').toLowerCase()}-responses.csv`);
       return;
     }
 
-    // Collect dynamic answer keys across all responses
     const keySet = new Set();
     responses.forEach((r) => Object.keys(r.answers || {}).forEach((k) => keySet.add(k)));
     const answerKeys = Array.from(keySet).sort();
@@ -442,7 +424,7 @@ const StudyDetail = () => {
       });
       setShowAssignmentModal(false);
     } catch {
-      // errors surfaced by mutation
+      /* handled by mutation */
     }
   };
 
@@ -471,12 +453,6 @@ const StudyDetail = () => {
       </div>
     );
   }
-
-  // helper to satisfy server zod(datetime) for dueAt when user picked only a date
-  const normalizeAssignPayload = (payload) => ({
-    ...payload,
-    dueAt: payload.dueAt ? new Date(`${payload.dueAt}T00:00:00Z`).toISOString() : undefined,
-  });
 
   return (
     <div className={styles.page}>
@@ -739,11 +715,11 @@ const StudyDetail = () => {
                           return label.includes(ownerSearch.trim().toLowerCase());
                         })
                         .map((owner) => {
-                          const ownerId = toId(owner).toString();
+                          const ownerId = (toId(owner) || '').toString();
                           const label = owner.displayName || owner.email || ownerId;
                           const managedCount = ownerPatientsMap.get(ownerId)?.size || 0;
                           return (
-                            <label key={ownerId} className={styles.selectionItem}>
+                            <label key={ownerId || label} className={styles.selectionItem}>
                               <input
                                 type="checkbox"
                                 checked={ownerSelection.has(ownerId)}
@@ -822,14 +798,7 @@ const StudyDetail = () => {
                       >
                         {formViewer.mode === 'edit' ? 'Done editing' : 'Edit form'}
                       </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setShowAssign(true)}
-                        disabled={!enrolledPatients.length || !staffCandidates.length}
-                      >
-                        Assign form
-                      </Button>
+                      {/* Assignment is automatic; no manual "Assign form" action */}
                     </div>
                   ) : null
                 }
@@ -953,20 +922,6 @@ const StudyDetail = () => {
             </Card>
           </div>
         </div>
-      ) : null}
-
-      {showAssign && formViewer?.form ? (
-        <AssignModal
-          patients={enrolledPatients}
-          staff={staffCandidates}
-          onAssign={(payload) =>
-            assignMutation.mutate({
-              formId: formViewer.form._id,
-              payload: normalizeAssignPayload(payload),
-            })
-          }
-          onClose={() => setShowAssign(false)}
-        />
       ) : null}
     </div>
   );
