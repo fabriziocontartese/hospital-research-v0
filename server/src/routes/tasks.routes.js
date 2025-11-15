@@ -23,6 +23,19 @@ const toIdString = (value) => {
   return null;
 };
 
+const keyOf = (task) => ({
+  orgId: toIdString(task.orgId),
+  studyId: toIdString(task.studyId),
+  formId: toIdString(task.formId),
+  pid: task.pid,
+});
+
+const statusAggregate = (tasks) => {
+  if (tasks.some((t) => t.status === 'submitted')) return 'submitted';
+  if (tasks.some((t) => t.status === 'expired')) return 'expired';
+  return 'open';
+};
+
 const ensureTaskWritable = async (user, task) => {
   if (!task) {
     const error = new Error('Task not found');
@@ -35,7 +48,15 @@ const ensureTaskWritable = async (user, task) => {
   }
 
   if (user.role === 'staff') {
-    if (toIdString(task.assignee) !== user._id.toString()) {
+    // Staff can write if they are an assignee for ANY sibling in the logical group
+    const count = await Task.countDocuments({
+      orgId: task.orgId,
+      studyId: task.studyId,
+      formId: task.formId,
+      pid: task.pid,
+      assignee: user._id,
+    });
+    if (!count) {
       const error = new Error('Forbidden');
       error.status = 403;
       throw error;
@@ -75,7 +96,15 @@ const ensureTaskReadable = async (user, task) => {
   }
 
   if (user.role === 'staff') {
-    if (toIdString(task.assignee) !== user._id.toString()) {
+    // Staff can read if they are an assignee for ANY sibling in the logical group
+    const count = await Task.countDocuments({
+      orgId: task.orgId,
+      studyId: task.studyId,
+      formId: task.formId,
+      pid: task.pid,
+      assignee: user._id,
+    });
+    if (!count) {
       const error = new Error('Forbidden');
       error.status = 403;
       throw error;
@@ -84,6 +113,7 @@ const ensureTaskReadable = async (user, task) => {
   }
 
   if (user.role === 'researcher') {
+    // If researcher is direct assignee, allow
     if (toIdString(task.assignee) === user._id.toString()) {
       return;
     }
@@ -129,6 +159,34 @@ router.get(
 
       await ensureTaskReadable(req.user, task);
 
+      // Load all siblings that share the same logical key (orgId, studyId, formId, pid)
+      const key = keyOf(task);
+      const siblings = await Task.find({
+        orgId: task.orgId,
+        studyId: key.studyId,
+        formId: key.formId,
+        pid: key.pid,
+      }).populate('assignee', 'displayName email role category');
+
+      // Aggregate assignees
+      const assigneesMap = new Map();
+      siblings.forEach((t) => {
+        const a = t.assignee;
+        if (a) {
+          assigneesMap.set(toIdString(a._id || a), a);
+        }
+      });
+
+      // Aggregate status (submitted wins, then expired, then open)
+      const aggregatedStatus = statusAggregate(siblings);
+
+      // Use earliest due date across siblings
+      const dueAt =
+        siblings
+          .map((t) => t.dueAt)
+          .filter(Boolean)
+          .sort((a, b) => a - b)[0] || task.dueAt || null;
+
       const formId = task.formId?._id || task.formId;
       const response = await FormResponse.findOne({
         formId,
@@ -136,11 +194,22 @@ router.get(
         orgId: req.user.orgId,
       }).populate('authoredBy', 'displayName email role');
 
-      const assigneeId = toIdString(task.assignee);
-      const canSubmit =
-        req.user.role === 'admin' ||
-        req.user.role === 'researcher' ||
-        assigneeId === req.user._id.toString();
+      let canSubmit = false;
+      if (req.user.role === 'admin') {
+        canSubmit = true;
+      } else if (req.user.role === 'researcher') {
+        canSubmit = true;
+      } else if (req.user.role === 'staff') {
+        const hasOwn = siblings.some(
+          (t) => toIdString(t.assignee) === req.user._id.toString()
+        );
+        canSubmit = hasOwn;
+      }
+
+      // Attach aggregated fields onto the main task document for the response
+      task.status = aggregatedStatus;
+      task.dueAt = dueAt;
+      task.assignees = Array.from(assigneesMap.values());
 
       res.json({
         task,
@@ -202,12 +271,49 @@ router.get(
         }
       }
 
-      const tasks = await Task.find(filter)
+      const rawTasks = await Task.find(filter)
         .populate('assignee', 'displayName email role category')
         .populate('formId')
         .populate('studyId');
 
-      res.json({ tasks });
+      // Group by logical task (orgId, studyId, formId, pid)
+      const groups = new Map(); // key -> { tasks: Task[], seed: Task }
+      for (const t of rawTasks) {
+        const k = JSON.stringify(keyOf(t));
+        if (!groups.has(k)) {
+          groups.set(k, { tasks: [], seed: t });
+        }
+        groups.get(k).tasks.push(t);
+      }
+
+      const groupedTasks = [];
+      for (const { tasks, seed } of groups.values()) {
+        const assigneesMap = new Map();
+        tasks.forEach((t) => {
+          const a = t.assignee;
+          if (a) {
+            assigneesMap.set(toIdString(a._id || a), a);
+          }
+        });
+
+        const aggregatedStatus = statusAggregate(tasks);
+        const dueAt =
+          tasks
+            .map((t) => t.dueAt)
+            .filter(Boolean)
+            .sort((a, b) => a - b)[0] || seed.dueAt || null;
+
+        const seedObj = seed.toObject({ virtuals: true });
+
+        groupedTasks.push({
+          ...seedObj,
+          status: aggregatedStatus,
+          dueAt,
+          assignees: Array.from(assigneesMap.values()),
+        });
+      }
+
+      res.json({ tasks: groupedTasks });
     } catch (error) {
       next(error);
     }
@@ -232,27 +338,39 @@ router.post(
 
       await ensureTaskReadable(req.user, task);
 
-      const assigneeId = toIdString(task.assignee);
       const userId = req.user._id.toString();
 
-      if (req.user.role === 'staff' && assigneeId !== userId) {
-        const error = new Error('Forbidden');
-        error.status = 403;
-        throw error;
+      if (req.user.role === 'staff') {
+        // Staff can submit if they are an assignee for ANY sibling
+        const count = await Task.countDocuments({
+          orgId: task.orgId,
+          studyId: task.studyId,
+          formId: task.formId,
+          pid: task.pid,
+          assignee: req.user._id,
+        });
+        if (!count) {
+          const error = new Error('Forbidden');
+          error.status = 403;
+          throw error;
+        }
       }
 
-      if (req.user.role === 'researcher' && assigneeId !== userId) {
-        const studyId = toIdString(task.studyId);
-        if (studyId) {
-          const study = await Study.findOne({ _id: studyId, orgId: req.user.orgId });
-          const researcherHasAccess =
-            study &&
-            (toIdString(study.createdBy) === userId ||
-              study.assignedStaff.some((memberId) => toIdString(memberId) === userId));
-          if (!researcherHasAccess) {
-            const error = new Error('Forbidden');
-            error.status = 403;
-            throw error;
+      if (req.user.role === 'researcher') {
+        const assigneeId = toIdString(task.assignee);
+        if (assigneeId !== userId) {
+          const studyId = toIdString(task.studyId);
+          if (studyId) {
+            const study = await Study.findOne({ _id: studyId, orgId: req.user.orgId });
+            const researcherHasAccess =
+              study &&
+              (toIdString(study.createdBy) === userId ||
+                study.assignedStaff.some((memberId) => toIdString(memberId) === userId));
+            if (!researcherHasAccess) {
+              const error = new Error('Forbidden');
+              error.status = 403;
+              throw error;
+            }
           }
         }
       }
@@ -280,16 +398,55 @@ router.post(
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
 
-      task.status = 'submitted';
-      await task.save();
+      // Mark ALL siblings as submitted for this logical task
+      const k = keyOf(task);
+      await Task.updateMany(
+        {
+          orgId: task.orgId,
+          studyId: k.studyId,
+          formId: k.formId,
+          pid: k.pid,
+        },
+        { $set: { status: 'submitted' } }
+      );
 
-      await task.populate([
-        { path: 'assignee', select: 'displayName email role category' },
-        { path: 'formId' },
-        { path: 'studyId' },
-      ]);
+      // Reload siblings to build aggregated task for the response
+      const siblings = await Task.find({
+        orgId: task.orgId,
+        studyId: k.studyId,
+        formId: k.formId,
+        pid: k.pid,
+      })
+        .populate('assignee', 'displayName email role category')
+        .populate('formId')
+        .populate('studyId');
 
-      res.json({ task, response });
+      const assigneesMap = new Map();
+      siblings.forEach((t) => {
+        const a = t.assignee;
+        if (a) {
+          assigneesMap.set(toIdString(a._id || a), a);
+        }
+      });
+
+      const aggregatedStatus = statusAggregate(siblings);
+      const dueAt =
+        siblings
+          .map((t) => t.dueAt)
+          .filter(Boolean)
+          .sort((a, b) => a - b)[0] || null;
+
+      const seed = siblings[0];
+      const seedObj = seed.toObject({ virtuals: true });
+
+      const aggregatedTask = {
+        ...seedObj,
+        status: aggregatedStatus,
+        dueAt,
+        assignees: Array.from(assigneesMap.values()),
+      };
+
+      res.json({ task: aggregatedTask, response });
     } catch (error) {
       next(error);
     }
@@ -319,10 +476,52 @@ router.delete(
         await response.deleteOne();
       }
 
-      task.status = 'open';
-      await task.save();
+      // Reset ALL siblings to open
+      const k = keyOf(task);
+      await Task.updateMany(
+        {
+          orgId: task.orgId,
+          studyId: k.studyId,
+          formId: k.formId,
+          pid: k.pid,
+        },
+        { $set: { status: 'open' } }
+      );
 
-      res.json({ task });
+      // Reload siblings to build aggregated task for the response
+      const siblings = await Task.find({
+        orgId: task.orgId,
+        studyId: k.studyId,
+        formId: k.formId,
+        pid: k.pid,
+      }).populate('assignee', 'displayName email role category');
+
+      const assigneesMap = new Map();
+      siblings.forEach((t) => {
+        const a = t.assignee;
+        if (a) {
+          assigneesMap.set(toIdString(a._id || a), a);
+        }
+      });
+
+      const aggregatedStatus = statusAggregate(siblings);
+      const dueAt =
+        siblings
+          .map((t) => t.dueAt)
+          .filter(Boolean)
+          .sort((a, b) => a - b)[0] || null;
+
+      const seed = siblings[0];
+      const seedObj = seed.toObject({ virtuals: true });
+
+      const aggregatedTask = {
+        ...seedObj,
+        status: aggregatedStatus,
+        dueAt,
+        assignees: Array.from(assigneesMap.values()),
+      };
+
+      res.json({ task: aggregatedTask });
     } catch (error) {
       next(error);
     }

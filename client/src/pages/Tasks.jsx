@@ -17,6 +17,14 @@ const statusOptions = [
   { value: 'submitted', label: 'Completed' },
 ];
 
+const statusMeta = {
+  open: { label: 'Pending', variant: 'primary' },
+  submitted: { label: 'Completed', variant: 'success' },
+  expired: { label: 'Overdue', variant: 'danger' },
+};
+const statusVariant = (status) => statusMeta[status]?.variant || 'neutral';
+const statusLabel = (status) => statusMeta[status]?.label || status;
+
 const Tasks = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -50,25 +58,23 @@ const Tasks = () => {
   const filteredTasks = useMemo(() => {
     const query = search.trim().toLowerCase();
     return tasks.filter((task) => {
-      if (status !== 'all' && task.status !== status) {
-        return false;
-      }
-      if (hideCompleted && task.status === 'submitted') {
-        return false;
-      }
+      if (status !== 'all' && task.status !== status) return false;
+      if (hideCompleted && task.status === 'submitted') return false;
       if (studyFilter !== 'all') {
         const studyId = task.studyId?._id || task.studyId;
-        if (!studyId || String(studyId) !== studyFilter) {
-          return false;
-        }
+        if (!studyId || String(studyId) !== studyFilter) return false;
       }
       if (!query) return true;
       const formName = task.formId?.schema?.title || task.formId?.version || '';
       const studyName = task.studyId?.title || '';
+      const assigneesText = (task.assignees || [])
+        .map((a) => a?.displayName || a?.email || '')
+        .join(' ');
       return (
         formName.toLowerCase().includes(query) ||
         studyName.toLowerCase().includes(query) ||
-        task.pid?.toLowerCase().includes(query)
+        (task.pid || '').toLowerCase().includes(query) ||
+        assigneesText.toLowerCase().includes(query)
       );
     });
   }, [tasks, search, status, studyFilter, hideCompleted]);
@@ -76,11 +82,8 @@ const Tasks = () => {
   const sortedTasks = useMemo(() => {
     const copy = [...filteredTasks];
     copy.sort((a, b) => {
-      const labelA = (a.assignee?.displayName || a.assignee?.email || '').toLowerCase();
-      const labelB = (b.assignee?.displayName || b.assignee?.email || '').toLowerCase();
-      if (!labelA && !labelB) return 0;
-      if (!labelA) return 1;
-      if (!labelB) return -1;
+      const labelA = (a.assignees?.[0]?.displayName || a.assignees?.[0]?.email || '').toLowerCase();
+      const labelB = (b.assignees?.[0]?.displayName || b.assignees?.[0]?.email || '').toLowerCase();
       return labelA.localeCompare(labelB);
     });
     return copy;
@@ -109,9 +112,7 @@ const Tasks = () => {
     return Array.from(map.values());
   }, [studies, tasks]);
 
-  const openTaskModal = (task) => {
-    setSelectedTask(task);
-  };
+  const openTaskModal = (task) => setSelectedTask(task);
 
   const resetTaskMutation = useMutation({
     mutationFn: (taskId) => apiClient.delete(`/api/tasks/${taskId}/response`),
@@ -190,13 +191,13 @@ const Tasks = () => {
               <span>Search</span>
               <Input
                 value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Form name, study, or patient ID"
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Form, study, assignee, or patient ID"
               />
             </label>
             <label>
               <span>Status</span>
-              <select value={status} onChange={(event) => setStatus(event.target.value)}>
+              <select value={status} onChange={(e) => setStatus(e.target.value)}>
                 {statusOptions.map((option) => (
                   <option key={option.value} value={option.value}>
                     {option.label}
@@ -206,7 +207,7 @@ const Tasks = () => {
             </label>
             <label>
               <span>Study</span>
-              <select value={studyFilter} onChange={(event) => setStudyFilter(event.target.value)}>
+              <select value={studyFilter} onChange={(e) => setStudyFilter(e.target.value)}>
                 <option value="all">All studies</option>
                 {studyOptions.map((option) => (
                   <option key={option.id} value={option.id}>
@@ -219,7 +220,7 @@ const Tasks = () => {
               <input
                 type="checkbox"
                 checked={hideCompleted}
-                onChange={(event) => setHideCompleted(event.target.checked)}
+                onChange={(e) => setHideCompleted(e.target.checked)}
               />
               <span>Exclude completed</span>
             </label>
@@ -245,6 +246,7 @@ const Tasks = () => {
             <TaskTable
               tasks={sortedTasks}
               onSelectTask={openTaskModal}
+              // For researchers/admins we show the assignee list column
               showAssignee={user.role !== 'staff'}
             />
           )}
@@ -253,7 +255,7 @@ const Tasks = () => {
 
       {selectedTask ? (
         <div className={styles.modalBackdrop} onClick={() => setSelectedTask(null)}>
-          <div className={styles.taskModal} onClick={(event) => event.stopPropagation()}>
+          <div className={styles.taskModal} onClick={(e) => e.stopPropagation()}>
             <Card>
               <CardHeader>
                 <CardTitle>Task overview</CardTitle>
@@ -267,7 +269,9 @@ const Tasks = () => {
                   </div>
                   <div>
                     <span className={styles.summaryLabel}>Form</span>
-                    <span className={styles.summaryValue}>{selectedTask.formId?.schema?.title || selectedTask.formId?.version || 'Form'}</span>
+                    <span className={styles.summaryValue}>
+                      {selectedTask.formId?.schema?.title || selectedTask.formId?.version || 'Form'}
+                    </span>
                   </div>
                   <div>
                     <span className={styles.summaryLabel}>Patient</span>
@@ -280,23 +284,27 @@ const Tasks = () => {
                     </span>
                   </div>
                   <div>
-                    <span className={styles.summaryLabel}>Assignee</span>
+                    <span className={styles.summaryLabel}>Assignees</span>
                     <span className={styles.summaryValue}>
-                      {selectedTask.assignee?.displayName || selectedTask.assignee?.email || '—'}
+                      {(selectedTask.assignees || []).length
+                        ? selectedTask.assignees
+                            .map((a) => a?.displayName || a?.email || '—')
+                            .join(', ')
+                        : '—'}
                     </span>
                   </div>
                   <div>
                     <span className={styles.summaryLabel}>Status</span>
-                    <Badge variant={statusVariant(selectedTask.status)}>{statusLabel(selectedTask.status)}</Badge>
+                    <Badge variant={statusVariant(selectedTask.status)}>
+                      {statusLabel(selectedTask.status)}
+                    </Badge>
                   </div>
                 </div>
               </CardContent>
               <CardContent className={styles.modalActions}>
                 {selectedTask.status === 'submitted' ? (
                   <>
-                    <Button onClick={() => handleNavigateToForm(selectedTask)}>
-                      Edit submission
-                    </Button>
+                    <Button onClick={() => handleNavigateToForm(selectedTask)}>Edit submission</Button>
                     <Button
                       variant="outline"
                       onClick={() => resetTaskMutation.mutate(selectedTask._id)}
@@ -319,15 +327,5 @@ const Tasks = () => {
     </div>
   );
 };
-
-
-const statusMeta = {
-  open: { label: 'Pending', variant: 'primary' },
-  submitted: { label: 'Completed', variant: 'success' },
-  expired: { label: 'Overdue', variant: 'danger' },
-};
-
-const statusVariant = (status) => statusMeta[status]?.variant || 'neutral';
-const statusLabel = (status) => statusMeta[status]?.label || status;
 
 export default Tasks;
